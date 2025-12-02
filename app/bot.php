@@ -1150,7 +1150,7 @@ class Bot
         file_put_contents('/config/ocserv.conf', $conf);
         $this->ssh('pkill ocserv', 'oc');
         $pac = $this->getPacConf();
-        if (!empty($pac['ocserv'])) {
+        if (!empty($pac['ocserv']) && !empty($this->getHashSubdomain('oc'))) {
             $this->ssh('ocserv -c /etc/ocserv/ocserv.conf', 'oc');
         }
     }
@@ -1162,7 +1162,7 @@ class Bot
         $c = file_get_contents('/config/Caddyfile');
         $t = preg_replace('~^(\t+)?basic_auth[^\n]+~sm', '$1basic_auth ' . ($pac['naive']['user'] ?? '_') . ' ' . ($pac['naive']['pass'] ?? '__'), $c);
         file_put_contents('/config/Caddyfile', $t);
-        if (!empty($pac['naive']['pass'])) {
+        if (!empty($pac['naive']['pass']) && !empty($this->getHashSubdomain('np'))) {
             $this->ssh('caddy run -c /config/Caddyfile', 'np', false);
         }
     }
@@ -1190,7 +1190,7 @@ class Bot
     public function chOcSubdomain($domain)
     {
         $pac = $this->getPacConf();
-        if (empty($domain)) {
+        if ($domain == -1) {
             unset($pac["oc_domain"]);
         } else {
             $pac["oc_domain"] = $domain;
@@ -1204,7 +1204,7 @@ class Bot
     public function chNpSubdomain($domain)
     {
         $pac = $this->getPacConf();
-        if (!empty($data)) {
+        if ($domain == -1) {
             unset($pac['np_domain']);
         } else {
             $pac['np_domain'] = $domain;
@@ -2402,8 +2402,7 @@ class Bot
                 $adguardClient = $conf['adguardkey'] ? "-d {$conf['adguardkey']}.{$conf['domain']}" : '';
                 $oc = $this->getHashSubdomain('oc');
                 $np = $this->getHashSubdomain('np');
-                $hy = $this->getHashSubdomain('hy');
-                exec("certbot certonly --force-renew --preferred-chain 'ISRG Root X1' -n --agree-tos --email mail@{$conf['domain']} -d {$conf['domain']} -d $oc.{$conf['domain']} -d $np.{$conf['domain']} -d $hy.{$conf['domain']} $adguardClient --webroot -w /certs/ --logs-dir /logs --max-log-backups 0 2>&1", $out, $code);
+                exec("certbot certonly --force-renew --preferred-chain 'ISRG Root X1' -n --agree-tos --email mail@{$conf['domain']} -d {$conf['domain']}" . ($oc ? " -d $oc.{$conf['domain']}" : '') . ($np ? " -d $np.{$conf['domain']}" : '') . " $adguardClient --webroot -w /certs/ --logs-dir /logs --max-log-backups 0 2>&1", $out, $code);
                 if ($code > 0) {
                     $this->send($this->input['chat'], "ERROR\n" . implode("\n", $out));
                     break;
@@ -4759,8 +4758,12 @@ DNS-over-HTTPS with IP:
                     $main[] = "<blockquote>";
                     $main[] = "Domains:";
                     $main[] = $conf['domain'] . (in_array($conf['domain'], $certs) ? ' (ssl: ' . date('Y-m-d H:i:s', $ssl_expiry) . ')' : '');
-                    $main[] = 'naive ' . "$np.{$conf['domain']}" . (in_array("$np.{$conf['domain']}", $certs) ? ' (ssl: ' . date('Y-m-d H:i:s', $ssl_expiry) . ')' : '');
-                    $main[] = 'openconnect ' . "$oc.{$conf['domain']}" . (in_array("$oc.{$conf['domain']}", $certs) ? ' (ssl: ' . date('Y-m-d H:i:s', $ssl_expiry) . ')' : '');
+                    if (!empty($np)) {
+                        $main[] = 'naive ' . "$np.{$conf['domain']}" . (in_array("$np.{$conf['domain']}", $certs) ? ' (ssl: ' . date('Y-m-d H:i:s', $ssl_expiry) . ')' : '');
+                    }
+                    if (!empty($oc)) {
+                        $main[] = 'openconnect ' . "$oc.{$conf['domain']}" . (in_array("$oc.{$conf['domain']}", $certs) ? ' (ssl: ' . date('Y-m-d H:i:s', $ssl_expiry) . ')' : '');
+                    }
                     if (!empty($conf['adguardkey'])) {
                         $main[] = "{$conf['adguardkey']}.{$conf['domain']}" . (in_array("{$conf['adguardkey']}.{$conf['domain']}", $certs) ? ' (ssl: ' . date('Y-m-d H:i:s', $ssl_expiry) . ')' : '') . ' adguard DOT';;
                     }
@@ -7957,7 +7960,7 @@ DNS-over-HTTPS with IP:
     {
         $sub   = $this->getHashSubdomain('oc');
         $nginx = file_get_contents('/config/upstream.conf');
-        $t     = preg_replace('~#ocserv.+#ocserv~s', $domain ? "#ocserv\n$sub.$domain ocserv;\n#ocserv" : "#ocserv\n#$sub.\$domain ocserv;\n#ocserv", $nginx);
+        $t     = preg_replace('~#ocserv.+#ocserv~s', $domain ? "#ocserv\n" . ($sub ? '' : '#' ) . "$sub.$domain ocserv;\n#ocserv" : "#ocserv\n#$sub.\$domain ocserv;\n#ocserv", $nginx);
         file_put_contents('/config/upstream.conf', $t);
         $this->ssh("nginx -s reload 2>&1", 'up');
     }
@@ -7966,7 +7969,7 @@ DNS-over-HTTPS with IP:
     {
         $sub   = $this->getHashSubdomain('np');
         $nginx = file_get_contents('/config/upstream.conf');
-        $t = preg_replace('~#naive.+#naive~s', $domain ? "#naive\n$sub.$domain naive;\n#naive" : "#naive\n#$sub.\$domain naive;\n#naive", $nginx);
+        $t = preg_replace('~#naive.+#naive~s', $domain ? "#naive\n" . ($sub ? '' : '#' ) . "$sub.$domain naive;\n#naive" : "#naive\n#$sub.\$domain naive;\n#naive", $nginx);
         file_put_contents('/config/upstream.conf', $t);
         $this->ssh("nginx -s reload 2>&1", 'up');
     }
@@ -8026,7 +8029,7 @@ DNS-over-HTTPS with IP:
     public function getHashSubdomain($subdomain)
     {
         $p = $this->getPacConf();
-        if (!empty($p["{$subdomain}_domain"])) {
+        if (isset($p["{$subdomain}_domain"])) {
             return $p["{$subdomain}_domain"];
         }
         $p["{$subdomain}_domain"] = substr(hash('sha256', "$subdomain{$this->key}"), 0, 8);
