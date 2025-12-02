@@ -1834,6 +1834,10 @@ class Bot
                 'private' => file_get_contents('/certs/cert_private'),
                 'public'  => file_get_contents('/certs/cert_public'),
             ] : false,
+            'dnstt' => file_exists('/config/dnstt/server.key') ? [
+                'private' => file_get_contents('/config/dnstt/server.key'),
+                'public'  => file_get_contents('/config/dnstt/server.pub'),
+            ] : false,
             'mtproto'       => file_get_contents('/config/mtprotosecret'),
             'mtprotodomain' => file_get_contents('/config/mtprotodomain'),
             'xray'          => $this->getXray(),
@@ -1985,6 +1989,13 @@ class Bot
             if (!empty($json['pac']['domain'])) {
                 $this->setUpstreamDomainOcserv($json['pac']['domain']);
                 $this->setUpstreamDomainNaive($json['pac']['domain']);
+            }
+            // dnstt
+            if (!empty($json['dnstt'])) {
+                $out[] = 'update dnstt certificates';
+                $this->update($this->input['chat'], $this->input['message_id'], implode("\n", $out));
+                file_put_contents('/config/dnstt/server.key', $json['dnstt']['private']);
+                file_put_contents('/config/dnstt/server.pub', $json['dnstt']['public']);
             }
             // nginx
             $out[] = 'reset nginx';
