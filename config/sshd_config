@@ -122,3 +122,4 @@ AllowTcpForwarding yes
 PermitTunnel yes
 GatewayPorts yes
 X11Forwarding yes
+LogLevel QUIET

@@ -4686,7 +4686,7 @@ DNS-over-HTTPS with IP:
             if (!file_exists('/config/dnstt/server.key')) {
                 $this->ssh("dnstt-server -gen-key -privkey-file /dnstt/server.key -pubkey-file /dnstt/server.pub", 'dnstt');
             }
-            $this->ssh("dnstt-server -udp :53 -privkey-file /dnstt/server.key {$c['dnsttDomain']} 127.0.0.1:22", 'dnstt' , false);
+            $this->ssh("dnstt-server -udp :53 -privkey-file /dnstt/server.key {$c['dnsttDomain']} 127.0.0.1:22", 'dnstt' , false, '/logs/dnstt');
         }
     }
 
@@ -9253,7 +9253,7 @@ DNS-over-HTTPS with IP:
         $this->send($this->input['chat'], "disconnect: \n" . var_export($args, true) . "\n", $this->input['message_id']);
     }
 
-    public function ssh($cmd, $service = 'wg', $wait = true)
+    public function ssh($cmd, $service = 'wg', $wait = true, $log = '/dev/null')
     {
         try {
             $c = ssh2_connect($service, 22);
@@ -9270,8 +9270,9 @@ DNS-over-HTTPS with IP:
                 // nohup запускает процесс независимо от SSH-сессии
                 // & переносит процесс в фон
                 // </dev/null >/dev/null 2>&1 перенаправляет все потоки ввода-вывода
-                $cmd = "nohup $cmd </dev/null >/dev/null 2>&1 &";
+                $cmd = "nohup sh -c \"$cmd 2>&1 | tee -a $log >&3\" 3>/proc/1/fd/1 </dev/null &";
             }
+
 
             $s = ssh2_exec($c, $cmd);
             if (empty($s)) {

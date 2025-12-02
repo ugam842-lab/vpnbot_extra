@@ -550,6 +550,7 @@ services:
         volumes:
             - ./config/.profile:/root/.ashrc:ro
             - ./ssh:/ssh
+            - ./logs:/logs
             - ./config/sshd_config:/etc/ssh/sshd_config
             - ./config/dnstt:/dnstt
             - ./scripts/start_dnstt.sh:/start_dnstt.sh
@@ -580,6 +581,7 @@ services:
             - ./ssh:/ssh
             - ./config/sshd_config:/etc/ssh/sshd_config
             - ./certs:/certs
+            - ./logs:/logs
             - ./config:/config
             - ./scripts/start_hysteria.sh:/start_hysteria.sh
         hostname: hysteria
