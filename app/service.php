@@ -29,4 +29,3 @@ $c = $bot->getPacConf();
 $bot->setUpstreamDomain($c['pac']['transport'] != 'Reality' ? 't' : ($c['pac']['reality']['domain'] ?: $c['xray']['inbounds'][0]['streamSettings']['realitySettings']['serverNames'][0]));
 $bot->setUpstreamDomainNaive($c['domain']);
 $bot->setUpstreamDomainOcserv($c['domain']);
-$bot->setUpstreamDomainHysteria($c['domain']);

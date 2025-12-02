@@ -179,6 +179,9 @@ class Bot
             case preg_match('~^/setHwidDevices(?: (\w+))?$~', $this->input['callback'], $m):
                 $this->setHwidDevices($m[1] ?? null);
                 break;
+            case preg_match('~^/changePort(?: (\w+))?$~', $this->input['callback'], $m):
+                $this->changePort($m[1] ?? null);
+                break;
             case preg_match('~^/hwidUser (\d+)(?:_(\d+))?$~', $this->input['callback'], $m):
                 $this->hwidUser($m[1], $m[2] ?? 0);
                 break;
@@ -1982,7 +1985,6 @@ class Bot
             if (!empty($json['pac']['domain'])) {
                 $this->setUpstreamDomainOcserv($json['pac']['domain']);
                 $this->setUpstreamDomainNaive($json['pac']['domain']);
-                $this->setUpstreamDomainHysteria($json['pac']['domain']);
             }
             // nginx
             $out[] = 'reset nginx';
@@ -2632,6 +2634,21 @@ class Bot
             'start_message' => $this->input['message_id'],
             'callback'      => 'switchIpLimit',
             'args'          => [],
+        ];
+    }
+
+    public function changePort($container)
+    {
+        $r = $this->send(
+            $this->input['chat'],
+            "@{$this->input['username']} number port",
+            $this->input['message_id'],
+            reply: 'number port',
+        );
+        $_SESSION['reply'][$r['result']['message_id']] = [
+            'start_message' => $this->input['message_id'],
+            'callback'      => 'setPort',
+            'args'          => [$container],
         ];
     }
 
@@ -4735,7 +4752,6 @@ DNS-over-HTTPS with IP:
                 $main[] = '';
                 $oc     = $this->getHashSubdomain('oc');
                 $np     = $this->getHashSubdomain('np');
-                $hy     = $this->getHashSubdomain('hy');
                 if (!empty($conf['domain'])) {
                     $ssl_expiry = $this->expireCert();
                     $certs      = $this->domainsCert() ?: [];
@@ -4745,7 +4761,6 @@ DNS-over-HTTPS with IP:
                     $main[] = $conf['domain'] . (in_array($conf['domain'], $certs) ? ' (ssl: ' . date('Y-m-d H:i:s', $ssl_expiry) . ')' : '');
                     $main[] = 'naive ' . "$np.{$conf['domain']}" . (in_array("$np.{$conf['domain']}", $certs) ? ' (ssl: ' . date('Y-m-d H:i:s', $ssl_expiry) . ')' : '');
                     $main[] = 'openconnect ' . "$oc.{$conf['domain']}" . (in_array("$oc.{$conf['domain']}", $certs) ? ' (ssl: ' . date('Y-m-d H:i:s', $ssl_expiry) . ')' : '');
-                    $main[] = 'hysteria ' . "$hy.{$conf['domain']}" . (in_array("$hy.{$conf['domain']}", $certs) ? ' (ssl: ' . date('Y-m-d H:i:s', $ssl_expiry) . ')' : '');
                     if (!empty($conf['adguardkey'])) {
                         $main[] = "{$conf['adguardkey']}.{$conf['domain']}" . (in_array("{$conf['adguardkey']}.{$conf['domain']}", $certs) ? ' (ssl: ' . date('Y-m-d H:i:s', $ssl_expiry) . ')' : '') . ' adguard DOT';;
                     }
@@ -4754,7 +4769,11 @@ DNS-over-HTTPS with IP:
                     $main[] = $this->i18n('domain explain');
                 }
             }
-            $main[] = '';
+
+
+            $ports   = yaml_parse_file('/docker/compose')['services'];
+            $hy_port = explode(':', $c['hy']['ports'][0])[0];
+            $main[]  = '';
 
             $main[] = '<code>';
             $main[] = $this->alignColumns([
@@ -4777,7 +4796,7 @@ DNS-over-HTTPS with IP:
                     $this->i18n('on') . ' 443',
                     $this->i18n('on') . ' 443',
                     $this->i18n('on') . ' 443',
-                    $this->i18n('on') . ' 443',
+                    $this->i18n($hy_port ? 'on' : 'off') . ($hy_port ? " $hy_port" : 'port unavailable'),
                     $this->i18n($c['tg'] ? 'on' : 'off') . ' ' . getenv('TGPORT'),
                     $this->i18n($c['ad'] ? 'on' : 'off') . ' 853',
                     $this->i18n($c['ss'] ? 'on' : 'off') . ' ' . getenv('SSPORT'),
@@ -5917,10 +5936,12 @@ DNS-over-HTTPS with IP:
     public function hysteriaMenu()
     {
         $pac    = $this->getPacConf();
+        $f      = '/docker/compose';
+        $c      = yaml_parse_file($f)['services'];
+        $port   = explode(':', $c['hy']['ports'][0])[0];
         $domain = $this->getDomain();
         $text[] = "Menu -> Hysteria";
-        $hy     = $this->getHashSubdomain('hy');
-        $text[] = "server: <code>$hy.$domain</code>";
+        $text[] = "server: " . ($port? "<code>$domain:$port</code>" : 'port unavailable');
         $text[] = "passwd: <code>{$pac['hysteria_pass']}</code>";
         $data[] = [
             [
@@ -7950,15 +7971,6 @@ DNS-over-HTTPS with IP:
         $this->ssh("nginx -s reload 2>&1", 'up');
     }
 
-    public function setUpstreamDomainHysteria($domain)
-    {
-        $sub   = $this->getHashSubdomain('hy');
-        $nginx = file_get_contents('/config/upstream.conf');
-        $t = preg_replace('~#hysteria.+#hysteria~s', $domain ? "#hysteria\n$sub.$domain hysteria;\n#hysteria" : "#hysteria\n#$sub.\$domain hysteria;\n#hysteria", $nginx);
-        file_put_contents('/config/upstream.conf', $t);
-        $this->ssh("nginx -s reload 2>&1", 'up');
-    }
-
     public function getHashBot($notset = false)
     {
         $p = $this->getPacConf();
@@ -8310,7 +8322,6 @@ DNS-over-HTTPS with IP:
         $conf = $this->getPacConf();
         $oc   = $this->getHashSubdomain('oc');
         $np   = $this->getHashSubdomain('np');
-        $hy   = $this->getHashSubdomain('hy');
         if (!empty($conf['domain'])) {
             $ssl_expiry = $this->expireCert();
             $certs      = $this->domainsCert() ?: [];
@@ -8320,7 +8331,6 @@ DNS-over-HTTPS with IP:
             $text[] = $conf['domain'] . (in_array($conf['domain'], $certs) ? ' (ssl: ' . date('Y-m-d H:i:s', $ssl_expiry) . ')' : '');
             $text[] = 'naive ' . "$np.{$conf['domain']}" . (in_array("$np.{$conf['domain']}", $certs) ? ' (ssl: ' . date('Y-m-d H:i:s', $ssl_expiry) . ')' : '');
             $text[] = 'openconnect ' . "$oc.{$conf['domain']}" . (in_array("$oc.{$conf['domain']}", $certs) ? ' (ssl: ' . date('Y-m-d H:i:s', $ssl_expiry) . ')' : '');
-            $text[] = 'hysteria ' . "$hy.{$conf['domain']}" . (in_array("$hy.{$conf['domain']}", $certs) ? ' (ssl: ' . date('Y-m-d H:i:s', $ssl_expiry) . ')' : '');
             if (!empty($conf['adguardkey'])) {
                 $text[] = "{$conf['adguardkey']}.{$conf['domain']}" . (in_array("{$conf['adguardkey']}.{$conf['domain']}", $certs) ? ' (ssl: ' . date('Y-m-d H:i:s', $ssl_expiry) . ')' : '') . ' adguard DOT';;
             }
@@ -8503,6 +8513,10 @@ DNS-over-HTTPS with IP:
                 'text'          => $this->i18n($c['dnstt'] ? 'on' : 'off') . ' 53 dnstt',
                 'callback_data' => "/hidePort dnstt",
             ]],
+            [[
+                'text'          => $this->i18n($c['hy'] ? 'on' : 'off') . ' ' . explode(':', $c['hy']['ports'][0])[0] . ' hysteria',
+                'callback_data' => "/changePort hy",
+            ]],
         ];
         if (!empty($pac['restart'])) {
             $data[] = [
@@ -8542,6 +8556,31 @@ DNS-over-HTTPS with IP:
             unset($c['services'][$container]);
         } else {
             $c['services'][$container]['ports'][] = $ports[$container];
+        }
+        if (empty($c['services'])) {
+            file_put_contents($f, '');
+        } else {
+            yaml_emit_file($f, $c);
+        }
+        $pac = $this->getPacConf();
+        $pac['restart'] = 1;
+        $this->setPacConf($pac);
+        $this->ports();
+    }
+
+    public function setPort($port, $container)
+    {
+        $port  = (int) $port;
+        $ports = [
+            'hy' => 443,
+        ];
+        $f = '/docker/compose';
+        $c = yaml_parse_file($f);
+
+        if (!empty($port) && is_numeric($port) && $port != 443) {
+            $c['services'][$container]['ports'] = ["$port:$ports[$container]"];
+        } else {
+            unset($c['services'][$container]);
         }
         if (empty($c['services'])) {
             file_put_contents($f, '');
