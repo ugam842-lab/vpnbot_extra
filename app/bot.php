@@ -8557,25 +8557,51 @@ DNS-over-HTTPS with IP:
     public function hidePort($container)
     {
         $ports = [
-            'wg'  => getenv('WGPORT') . ':' . getenv('WGPORT') . '/udp',
-            'wg1' => getenv('WG1PORT') . ':' . getenv('WG1PORT') . '/udp',
-            'tg'  => getenv('TGPORT') . ':' . getenv('TGPORT'),
-            'ad'  => '853:853',
-            'ss'  => '8388:8388',
-            'dnstt'  => '53:53/udp',
+            'wg'    => getenv('WGPORT') . ':' . getenv('WGPORT') . '/udp',
+            'wg1'   => getenv('WG1PORT') . ':' . getenv('WG1PORT') . '/udp',
+            'tg'    => getenv('TGPORT') . ':' . getenv('TGPORT'),
+            'ad'    => '853:853',
+            'ss'    => '8388:8388',
+            'dnstt' => '53:53/udp',
         ];
         $f = '/docker/compose';
-        $c = yaml_parse_file($f);
+        $content = file_exists($f) ? file_get_contents($f) : '';
+
+        // Находим все сервисы с !override для ports
+        $overrides = [];
+        if (preg_match_all('/(\w+):\s*\n\s+ports:\s*!override/m', $content, $matches)) {
+            foreach ($matches[1] as $service) {
+                $overrides[$service] = true;
+            }
+        }
+
+        // Парсим YAML
+        $c = $content ? yaml_parse($content) : [];
+
+        // Изменяем структуру
         if (!empty($c['services'][$container])) {
             unset($c['services'][$container]);
         } else {
             $c['services'][$container]['ports'][] = $ports[$container];
         }
+
+        // Записываем обратно
         if (empty($c['services'])) {
             file_put_contents($f, '');
         } else {
-            yaml_emit_file($f, $c);
+            $yaml = yaml_emit($c);
+            // Восстанавливаем !override для ports тех сервисов где он был
+            foreach ($overrides as $service => $val) {
+                // Заменяем "ports:" на "ports: !override" для конкретного сервиса
+                $yaml = preg_replace(
+                    '/(' . preg_quote($service, '/') . ':\s*\n\s+)ports:/m',
+                    '${1}ports: !override',
+                    $yaml
+                );
+            }
+            file_put_contents($f, $yaml);
         }
+
         $pac = $this->getPacConf();
         $pac['restart'] = 1;
         $this->setPacConf($pac);
@@ -8589,18 +8615,43 @@ DNS-over-HTTPS with IP:
             'hy' => 443,
         ];
         $f = '/docker/compose';
-        $c = yaml_parse_file($f);
+        $content = file_exists($f) ? file_get_contents($f) : '';
 
+        // Находим все сервисы с !override для ports
+        $overrides = [];
+        if (preg_match_all('/(\w+):\s*\n\s+ports:\s*!override/m', $content, $matches)) {
+            foreach ($matches[1] as $service) {
+                $overrides[$service] = true;
+            }
+        }
+
+        // Парсим YAML
+        $c = $content ? yaml_parse($content) : [];
+
+        // Изменяем структуру
         if (!empty($port) && is_numeric($port) && $port != 443) {
             $c['services'][$container]['ports'] = ["$port:$ports[$container]"];
         } else {
             unset($c['services'][$container]);
         }
+
+        // Записываем обратно
         if (empty($c['services'])) {
             file_put_contents($f, '');
         } else {
-            yaml_emit_file($f, $c);
+            $yaml = yaml_emit($c);
+            // Восстанавливаем !override для ports тех сервисов где он был
+            foreach ($overrides as $service => $val) {
+                // Заменяем "ports:" на "ports: !override" для конкретного сервиса
+                $yaml = preg_replace(
+                    '/(' . preg_quote($service, '/') . ':\s*\n\s+)ports:/m',
+                    '${1}ports: !override',
+                    $yaml
+                );
+            }
+            file_put_contents($f, $yaml);
         }
+
         $pac = $this->getPacConf();
         $pac['restart'] = 1;
         $this->setPacConf($pac);
