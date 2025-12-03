@@ -1175,7 +1175,7 @@ class Bot
         $c['auth']['password'] = $pac['hysteria_pass'];
         yaml_emit_file('/config/hysteria.yaml', $c);
         if (!empty($pac['hysteria_pass'])) {
-            $this->ssh('hysteria server -c /config/hysteria.yaml', 'hy', false);
+            $this->ssh('hysteria server -c /config/hysteria.yaml', 'hy', false, '/logs/hysteria');
         }
     }
 
@@ -8612,7 +8612,7 @@ DNS-over-HTTPS with IP:
     {
         $port  = (int) $port;
         $ports = [
-            'hy' => 443,
+            'hy' => '443/udp',
         ];
         $f = '/docker/compose';
         $content = file_exists($f) ? file_get_contents($f) : '';

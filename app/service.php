@@ -25,6 +25,7 @@ $bot->cloakNginx();
 $bot->syncDeny();
 $bot->cleanDocker();
 $bot->dnsttStart();
+$bot->restartHysteria();
 $c = $bot->getPacConf();
 $bot->setUpstreamDomain($c['pac']['transport'] != 'Reality' ? 't' : ($c['pac']['reality']['domain'] ?: $c['xray']['inbounds'][0]['streamSettings']['realitySettings']['serverNames'][0]));
 $bot->setUpstreamDomainNaive($c['domain']);
