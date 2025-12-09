@@ -561,8 +561,8 @@ class Bot
             case preg_match('~^/addNipdomain$~', $this->input['callback'], $m):
                 $this->addNipdomain();
                 break;
-            case preg_match('~^/(?P<action>change|delete)(?P<typelist>\w+) (?P<arg>\d+)$~', $this->input['callback'], $m):
-                $this->listPacChange($m['typelist'], $m['action'], $m['arg']);
+            case preg_match('~^/(?P<action>change|delete)(?P<typelist>\w+) (?P<arg>\d+)(?: (?P<page>\d+))?$~', $this->input['callback'], $m):
+                $this->listPacChange($m['typelist'], $m['action'], $m['arg'], $m['page'] ?: 0);
                 break;
             case preg_match('~^/paczapret$~', $this->input['callback'], $m):
                 $this->pacZapret();
@@ -2972,42 +2972,42 @@ DNS-over-HTTPS with IP:
             $page = (int) floor(array_search($v, array_keys($conf[$type])) / $this->limit);
         }
         $page = $page ?: -2;
-        $this->backXtlsList($type);
+        $this->backXtlsList($type, $page);
     }
 
-    public function backXtlsList($type)
+    public function backXtlsList($type, $page = 0)
     {
         switch ($type) {
             case 'includelist':
                 $this->pacUpdate($_SESSION['proxylistentry']);
                 if (!empty($_SESSION['proxylistentry'])) {
-                    $this->xtlsproxy();
+                    $this->xtlsproxy($page);
                 }
                 break;
             case 'blocklist':
                 $this->xrayUpdateRules();
-                $this->xtlsblock();
+                $this->xtlsblock($page);
                 break;
             case 'warplist':
                 $this->xrayUpdateRules();
-                $this->xtlswarp();
+                $this->xtlswarp($page);
                 break;
             case 'processlist':
-                $this->xtlsprocess();
+                $this->xtlsprocess($page);
                 break;
             case 'packagelist':
-                $this->xtlsapp();
+                $this->xtlsapp($page);
                 break;
             case 'subnetlist':
-                $this->xtlssubnet();
+                $this->xtlssubnet($page);
                 break;
             case 'rulessetlist':
-                $this->xtlsrulesset();
+                $this->xtlsrulesset($page);
                 break;
             case 'white':
             case 'deny':
                 $this->syncDeny();
-                $this->denyList(0, $type == 'white' ? 1 : 0);
+                $this->denyList($page, $type == 'white' ? 1 : 0);
                 break;
         }
     }
@@ -4425,11 +4425,11 @@ DNS-over-HTTPS with IP:
                 $data[] = [
                     [
                         'text'          => $this->i18n($v ? 'on' : 'off') . ' ' . ($basename ? basename($k) . ' ' : '') . (in_array($type, ['rulessetlist', 'packagelist', 'processlist', 'subnetlist']) ? $k : idn_to_utf8($k)),
-                        'callback_data' => "/change$type " . ($i + $page * $this->limit),
+                        'callback_data' => "/change$type " . ($i + $page * $this->limit) . " $page",
                     ],
                     [
                         'text'          => 'delete',
-                        'callback_data' => "/delete$type " . ($i + $page * $this->limit),
+                        'callback_data' => "/delete$type " . ($i + $page * $this->limit) . " $page",
                     ],
                 ];
                 $i++;
@@ -4475,7 +4475,7 @@ DNS-over-HTTPS with IP:
         return [$data, $text];
     }
 
-    public function listPacChange($type, $action, $key)
+    public function listPacChange($type, $action, $key, $page = 0)
     {
         $conf = $this->getPacConf();
         $i = 0;
@@ -4494,7 +4494,7 @@ DNS-over-HTTPS with IP:
             $i++;
         }
         $this->setPacConf($conf);
-        $this->backXtlsList($type);
+        $this->backXtlsList($type, $page);
     }
 
     public function pacZapret()
@@ -4921,7 +4921,7 @@ DNS-over-HTTPS with IP:
             'wg'           => $type == 'wg'      ? $this->statusWg($arg)                   : false,
             'client'       => $type == 'client'  ? $this->getClient(...explode('_', $arg)) : false,
             'addpeer'      => $type == 'addpeer' ? $this->addWg(...explode('_', $arg))     : false,
-            'pac'          => $type == 'pac'     ? $this->pacMenu($arg)                    : false,
+            'pac'          => $type == 'pac'     ? $this->pacMenu((int) $arg)              : false,
             'adguard'      => $type == 'adguard' ? $this->adguardMenu()                    : false,
             'config'       => $type == 'config'  ? $this->configMenu()                     : false,
             'ss'           => $type == 'ss'      ? $this->menuSS()                         : false,
