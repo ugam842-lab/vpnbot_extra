@@ -40,21 +40,13 @@ services:
         hostname: upstream
         container_name: upstream-${VER}
         depends_on:
-            php:
-                condition: service_healthy
             ng:
                 condition: service_healthy
-            ad:
-                condition: service_started
-            ss:
-                condition: service_started
             xr:
                 condition: service_started
             oc:
                 condition: service_started
             np:
-                condition: service_started
-            hy:
                 condition: service_started
         env_file:
             - path: ./.env
@@ -106,6 +98,8 @@ services:
         depends_on:
             php:
                 condition: service_healthy
+            ad:
+                condition: service_started
         healthcheck:
             test: ["CMD", "nginx", "-t"]
             interval: 10s
