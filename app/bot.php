@@ -4701,9 +4701,9 @@ DNS-over-HTTPS with IP:
         $pubkey = file_get_contents('/config/dnstt/server.pub');
         $text[] = "dnstt";
         $text[] = "<pre>set the NS record for {$c['dnsttDomain']}: tns.{$c['domain']}\nset A record for tns.{$c['domain']}: {$this->ip}</pre>";
-        $text[] = "domain: <code>{$c['dnsttDomain']}</code>";
-        $text[] = "ssh: <code>vpnbot:{$c['dnsttPassword']}</code>";
-        $text[] = "pubkey: <code>$pubkey</code>";
+        $text[] = "account: <code>vpnbot:{$c['dnsttPassword']}</code>";
+        $text[] = "server name: <code>{$c['dnsttDomain']}</code>";
+        $text[] = "public key: <code>$pubkey</code>";
 
         $data[] = [
             [
