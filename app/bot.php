@@ -7943,17 +7943,11 @@ DNS-over-HTTPS with IP:
                             case 'package':
                                 echo yaml_emit(['payload' => array_map(fn($e) => "PROCESS-NAME,$e", $v['list'])]);
                                 break;
-                            case 'pac':
-                                echo yaml_emit(['payload' => array_map(fn($e) => "+.$e", $v['list'])]);
-                                break;
-                            case 'subnet':
-                                echo yaml_emit(['payload' => array_map(fn($e) => $e, $v['list'])]);
-                                break;
 
                             default:
                                 echo yaml_emit(['payload' => array_map(function($e) {
-                                    if (preg_match('~^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(/\d{1,2})?$~', $e)) {
-                                        return "IP-CIDR,$e";
+                                    if (preg_match('~^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(/\d{1,2})?$~', $e, $m)) {
+                                        return "IP-CIDR,$e" . (empty($m[1]) ? '/32' : '');
                                     } else {
                                         return "DOMAIN-SUFFIX,$e";
                                     }
@@ -8054,10 +8048,10 @@ DNS-over-HTTPS with IP:
         foreach ($rules as $k => $v) {
             if (array_key_exists('domain_suffix', $v)) {
                 foreach ($v['domain_suffix'] as $j) {
-                    if (!preg_match('~^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(/\d{1,2})?$~', $j)) {
+                    if (!preg_match('~^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(/\d{1,2})?$~', $j, $m)) {
                         $domains[] = $j;
                     } else {
-                        $ips[] = $j;
+                        $ips[] = $j . (empty($m[1]) ? '/32' : '');
                     }
                 }
                 unset($rules[$k]['domain_suffix']);
