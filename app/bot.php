@@ -3823,7 +3823,7 @@ DNS-over-HTTPS with IP:
                             "client_pub_key"  => "0",
                             "config"          => $this->createConfig($client),
                             "hostName"        => $this->ip,
-                            "port"            => (int) getenv('WG1PORT'),
+                            "port"            => (int) getenv($this->getInstanceWG() == 'wg1' ? 'WG1PORT' : 'WGPORT'),
                             "psk_key"         => $client['peers'][0]['PresharedKey'],
                             "server_pub_key"  => $client['peers'][0]['PublicKey']
                         ]),
