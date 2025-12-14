@@ -4701,20 +4701,24 @@ DNS-over-HTTPS with IP:
         $c      = $this->getPacConf();
         $pubkey = file_get_contents('/config/dnstt/server.pub');
         $text[] = "dnstt";
-        $text[] = "<pre>set the NS record for {$c['dnsttDomain']}: tns.{$c['domain']}\nset A record for tns.{$c['domain']}: {$this->ip}</pre>";
-        $text[] = "account: <code>vpnbot:{$c['dnsttPassword']}</code>";
-        $text[] = "server name: <code>{$c['dnsttDomain']}</code>";
-        $text[] = "public key: <code>$pubkey</code>";
+        if (!empty($c['dnsttDomain']) && !empty($c['dnsttPassword'])) {
+            $text[] = "<pre>set the NS record for {$c['dnsttDomain']}: tns.{$c['domain']}\nset A record for tns.{$c['domain']}: {$this->ip}</pre>";
+            $text[] = "account: <code>vpnbot:{$c['dnsttPassword']}</code>";
+            $text[] = "server name: <code>{$c['dnsttDomain']}</code>";
+            $text[] = "public key: <code>$pubkey</code>";
+            $data[] = [
+                [
+                    'text'          => $this->i18n('download pubkey'),
+                    'callback_data' => "/dnsttDownload",
+                ],
+            ];
+        } else {
+            $text[] = "set subdomain and password";
+        }
 
         $data[] = [
             [
-                'text'          => $this->i18n('download pubkey'),
-                'callback_data' => "/dnsttDownload",
-            ],
-        ];
-        $data[] = [
-            [
-                'text'          => $this->i18n('set domain'),
+                'text'          => $this->i18n('set subdomain'),
                 'callback_data' => "/dnsttDomain",
             ],
         ];
