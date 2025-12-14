@@ -1,13 +1,33 @@
-FROM alpine:3.6
-RUN apk add --no-cache --virtual .build-deps alpine-sdk linux-headers openssl-dev \
-    && git clone --single-branch --depth 1 https://github.com/TelegramMessenger/MTProxy.git /mtproxy/sources \
-    && mkdir /mtproxy/patches && wget -P /mtproxy/patches https://raw.githubusercontent.com/alexdoesh/mtproxy/master/patches/randr_compat.patch \
-    && cd /mtproxy/sources && patch -p0 -i /mtproxy/patches/randr_compat.patch \
-    && make \
-    && mkdir /root/.ssh \
-    && cp /mtproxy/sources/objs/bin/mtproto-proxy /usr/bin \
-    && rm -rf /mtproxy \
-    && apk del .build-deps\
-    && apk add --no-cache --update curl openssh \
-    && ln -s /usr/lib/libcrypto.so.41 /usr/lib/libcrypto.so.1.0.0
-ENV ENV="/root/.ashrc"
+# Build stage
+FROM ubuntu:22.04 AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git \
+        build-essential \
+        libssl-dev \
+        zlib1g-dev \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+RUN git clone --single-branch --depth 1 https://github.com/GetPageSpeed/MTProxy . \
+    && make -j$(nproc) \
+    && strip objs/bin/mtproto-proxy
+
+# Runtime stage - minimal Ubuntu
+FROM ubuntu:22.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libssl3 \
+        zlib1g \
+        curl \
+        openssh-client \
+        openssh-server \
+        ca-certificates \
+        vim-common \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /root/.ssh /var/run/sshd
+
+COPY --from=builder /src/objs/bin/mtproto-proxy /usr/local/bin/mtproto-proxy
+
+ENV PATH="/usr/local/bin:$PATH"

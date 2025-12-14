@@ -325,15 +325,16 @@ services:
         entrypoint: ["/bin/sh", "/start_ad.sh"]
         logging: *default-logging
     tg:
-        image: mercurykd/vpnbot-tg:1.2
+        image: mercurykd/vpnbot-tg:1.3
         build:
             dockerfile: dockerfile/telegram.dockerfile
         volumes:
-            - ./config/.profile:/root/.ashrc:ro
+            - ./config/.profile:/root/.bashrc:ro
             - ./ssh:/ssh
             - ./config/sshd_config:/etc/ssh/sshd_config
             - ./scripts/start_tg.sh:/start_tg.sh
             - ./config/mtprotosecret:/mtprotosecret
+            - ./logs/:/logs/
         hostname: telegram
         container_name: mtproto-${VER}
         depends_on:

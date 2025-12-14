@@ -728,11 +728,11 @@ class Bot
     public function restartTG()
     {
         $secret     = file_get_contents('/config/mtprotosecret');
-        $fakedomain = file_get_contents('/config/mtprotodomain') ?: 'vk.com';
+        $fakedomain = file_get_contents('/config/mtprotodomain') ?: 'yandex.ru';
         $this->ssh('pkill mtproto-proxy', 'tg');
         if (preg_match('~^\w{32}$~', $secret)) {
             $p = getenv('TGPORT');
-            $this->ssh("mtproto-proxy --domain $fakedomain -u nobody -H $p --nat-info 10.10.0.8:{$this->ip} -S $secret --aes-pwd /proxy-secret /proxy-multi.conf -M 1 >/dev/null 2>&1 &", 'tg');
+            $this->ssh("mtproto-proxy --domain $fakedomain -u nobody -H $p --nat-info 10.10.0.8:{$this->ip} -S $secret --aes-pwd /proxy-secret /proxy-multi.conf -M 1", 'tg', false, '/logs/mtproto');
         }
     }
 
@@ -820,15 +820,15 @@ class Bot
     {
         $s  = file_get_contents('/config/mtprotosecret');
         $p  = getenv('TGPORT');
-        $d  = trim(file_get_contents('/config/mtprotodomain') ?: 'vk.com');
+        $d  = trim(file_get_contents('/config/mtprotodomain') ?: 'yandex.ru');
         $d  = exec("echo $d | tr -d '\\n' | xxd -ps -c 200");
-        $ip = $this->getPacConf()['domain'] ?: $this->ip;
+        $ip = $this->getDomain();
         return "https://t.me/proxy?server=$ip&port=$p&secret=ee$s$d";
     }
 
     public function mtproto()
     {
-        $d      = file_get_contents('/config/mtprotodomain') ?: 'vk.com';
+        $d      = file_get_contents('/config/mtprotodomain') ?: 'yandex.ru';
         $st     = $this->ssh('pgrep mtproto-proxy', 'tg') ? 'on' : 'off';
         $text[] = "Menu -> MTProto\n";
         $text[] = "status: $st\n";
@@ -9077,7 +9077,7 @@ DNS-over-HTTPS with IP:
         $x = $this->getXray();
         $h = $this->getHashBot();
 
-        $p['reality']['domain']      = $p['reality']['domain'] ?: 'web.telegram.org';
+        $p['reality']['domain']      = $p['reality']['domain'] ?: 'yandex.ru';
         $p['reality']['destination'] = $p['reality']['destination'] ?: $p['reality']['domain'] . ':443';
         $p['transport']              = $transport;
 
