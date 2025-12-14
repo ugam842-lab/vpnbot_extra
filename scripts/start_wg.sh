@@ -14,7 +14,8 @@ then
         echo "ListenPort = $WG1PORT" >> /etc/wireguard/wg0.conf
     else
         sed "s/ListenPort = [0-9]\+/ListenPort = $WG1PORT/" /etc/wireguard/wg0.conf > change_port
-        cat change_port > /etc/wireguard/wg0.conf
+        sed "s|Address = [0-9\.\/ ]\+|Address = $ADDRESS|" change_port > change_address
+        cat change_address > /etc/wireguard/wg0.conf
     fi
 else
     if [ $(cat /etc/wireguard/wg0.conf | wc -c) -eq 0 ]
@@ -26,7 +27,8 @@ else
         echo "ListenPort = $WGPORT" >> /etc/wireguard/wg0.conf
     else
         sed "s/ListenPort = [0-9]\+/ListenPort = $WGPORT/" /etc/wireguard/wg0.conf > change_port
-        cat change_port > /etc/wireguard/wg0.conf
+        sed "s|Address = [0-9\.\/ ]\+|Address = $ADDRESS|" change_port > change_address
+        cat change_address > /etc/wireguard/wg0.conf
     fi
 fi
 iptables -t nat -A POSTROUTING --destination 10.10.0.5 -j ACCEPT
