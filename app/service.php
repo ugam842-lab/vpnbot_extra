@@ -27,6 +27,6 @@ $bot->cleanDocker();
 $bot->dnsttStart();
 $bot->restartHysteria();
 $c = $bot->getPacConf();
-$bot->setUpstreamDomain($c['pac']['transport'] != 'Reality' ? 't' : ($c['pac']['reality']['domain'] ?: $c['xray']['inbounds'][0]['streamSettings']['realitySettings']['serverNames'][0]));
+$bot->setUpstreamDomain($c['transport'] != 'Reality' ? 't' : $c['reality']['domain']);
 $bot->setUpstreamDomainNaive($c['domain']);
 $bot->setUpstreamDomainOcserv($c['domain']);
