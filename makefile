@@ -47,15 +47,11 @@ oc: # консоль сервиса
 	docker compose exec oc /bin/sh
 service: # консоль сервиса
 	docker compose exec service /bin/sh
-clean:
-	docker image prune
-	docker builder prune
-cleanf:
-	docker image prune -f > /dev/null
-	docker builder prune -f > /dev/null
-cleanall:
-	docker image prune -a -f
-	docker builder prune -a -f
+delete:
+	make d
+	docker system prune -f -a
+	docker volume prune -f -a
+	rm -rf /root/vpnbot
 push:
 	docker compose push
 s:
