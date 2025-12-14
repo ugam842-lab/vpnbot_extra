@@ -3802,6 +3802,7 @@ DNS-over-HTTPS with IP:
 
     public function getAmneziaShortLink($client)
     {
+        $domain = $this->getDomain();
         $dns = explode(',', $client['interface']['DNS']);
         $c   = json_encode([
             "containers" => [
@@ -3822,7 +3823,7 @@ DNS-over-HTTPS with IP:
                             "client_priv_key" => $client['interface']['PrivateKey'],
                             "client_pub_key"  => "0",
                             "config"          => $this->createConfig($client),
-                            "hostName"        => $this->ip,
+                            "hostName"        => $domain,
                             "port"            => (int) getenv($this->getInstanceWG() == 'wg1' ? 'WG1PORT' : 'WGPORT'),
                             "psk_key"         => $client['peers'][0]['PresharedKey'],
                             "server_pub_key"  => $client['peers'][0]['PublicKey']
@@ -3837,7 +3838,7 @@ DNS-over-HTTPS with IP:
             "description"      => $client['interface']['## name'],
             "dns1"             => $dns[0],
             "dns2"             => $dns[1] ?: '',
-            "hostName"         => $this->ip
+            "hostName"         => $domain
         ]);
         exec("echo '$c' | python amnezia.py", $o);
         return $o[0];
