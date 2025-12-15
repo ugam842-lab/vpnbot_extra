@@ -320,7 +320,7 @@ class Bot
             case preg_match('~^/logs$~', $this->input['callback'], $m):
                 $this->logs();
                 break;
-            case preg_match('~^/dnstt$~', $this->input['callback'], $m):
+            case preg_match('~^/dnstt$~', $this->input['message'], $m):
                 $this->dnstt();
                 break;
             case preg_match('~^/dnsttDownload$~', $this->input['callback'], $m):
@@ -4734,10 +4734,10 @@ DNS-over-HTTPS with IP:
                 'callback_data' => "/menu",
             ],
         ];
-        $this->update(
+        $this->send(
             $this->input['chat'],
-            $this->input['message_id'],
             implode("\n", $text),
+            $this->input['message_id'],
             $data ?: false,
         );
     }
@@ -4897,10 +4897,6 @@ DNS-over-HTTPS with IP:
                         [
                             'text'          => $this->i18n('Hysteria'),
                             'callback_data' => "/menu hy",
-                        ],
-                        [
-                            'text'          => $this->i18n('DNSTT'),
-                            'callback_data' => "/dnstt",
                         ],
                     ],
                     [
