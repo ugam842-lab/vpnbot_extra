@@ -320,8 +320,11 @@ class Bot
             case preg_match('~^/logs$~', $this->input['callback'], $m):
                 $this->logs();
                 break;
-            case preg_match('~^/dnstt$~', $this->input['message'], $m):
-                $this->dnstt();
+            case preg_match('~^/dnstt$~', $this->input['callback'] ?: $this->input['message'], $m):
+                $this->dnstt(!empty($this->input['callback']));
+                break;
+            case preg_match('~^/showdnstt$~', $this->input['callback'], $m):
+                $this->showdnstt();
                 break;
             case preg_match('~^/dnsttDownload$~', $this->input['callback'], $m):
                 $this->dnsttDownload();
@@ -1236,7 +1239,11 @@ class Bot
     public function chhypass($pass)
     {
         $pac = $this->getPacConf();
-        $pac['hysteria_pass'] = $pass;
+        if (!empty($pass)) {
+            $pac['hysteria_pass'] = $pass;
+        } else {
+            unset($pac['hysteria_pass']);
+        }
         $this->setPacConf($pac);
         $this->restartHysteria();
         $this->menu('hy');
@@ -4696,11 +4703,25 @@ DNS-over-HTTPS with IP:
         $this->sendFile($this->input['from'], curl_file_create('/config/dnstt/server.pub'));
     }
 
-    public function dnstt()
+    public function showdnstt()
+    {
+        $c = $this->getPacConf();
+        $c['showdnstt'] = empty($c['showdnstt']);
+        $this->setPacConf($c);
+        $this->dnstt(1);
+    }
+
+    public function dnstt($update = false)
     {
         $c      = $this->getPacConf();
         $pubkey = file_get_contents('/config/dnstt/server.pub');
         $text[] = "dnstt";
+        $data[] = [
+            [
+                'text'          => $this->i18n('show in menu ') . $this->i18n($c['showdnstt'] ? 'on' : 'off'),
+                'callback_data' => "/showdnstt",
+            ],
+        ];
         if (!empty($c['dnsttDomain']) && !empty($c['dnsttPassword'])) {
             $text[] = "<pre>set the NS record for {$c['dnsttDomain']}: tns.{$c['domain']}\nset A record for tns.{$c['domain']}: {$this->ip}</pre>";
             $text[] = "account: <code>vpnbot:{$c['dnsttPassword']}</code>";
@@ -4734,12 +4755,21 @@ DNS-over-HTTPS with IP:
                 'callback_data' => "/menu",
             ],
         ];
-        $this->send(
-            $this->input['chat'],
-            implode("\n", $text),
-            $this->input['message_id'],
-            $data ?: false,
-        );
+        if ($update) {
+            $this->update(
+                $this->input['chat'],
+                $this->input['message_id'],
+                implode("\n", $text),
+                $data ?: false,
+            );
+        } else {
+            $this->send(
+                $this->input['chat'],
+                implode("\n", $text),
+                $this->input['message_id'],
+                $data ?: false,
+            );
+        }
     }
 
     public function menu($type = false, $arg = false, $return = false)
@@ -4842,82 +4872,94 @@ DNS-over-HTTPS with IP:
         $menu   = [
             'main' => [
                 'text' => implode("\n", $main ?: []),
-                'data' => [
+                'data' => array_merge(
                     [
                         [
-                            'text'          => $this->i18n($this->getPacConf()['amnezia'] ? 'amnezia' : 'wg_title'),
-                            'callback_data' => "/changeWG 0",
+                            [
+                                'text'          => $this->i18n($this->getPacConf()['amnezia'] ? 'amnezia' : 'wg_title'),
+                                'callback_data' => "/changeWG 0",
+                            ],
+                            [
+                                'text'          => $this->i18n($this->getPacConf()['wg1_amnezia'] ? 'amnezia' : 'wg_title'),
+                                'callback_data' => "/changeWG 1",
+                            ],
                         ],
                         [
-                            'text'          => $this->i18n($this->getPacConf()['wg1_amnezia'] ? 'amnezia' : 'wg_title'),
-                            'callback_data' => "/changeWG 1",
+                            [
+                                'text'          => $this->i18n('xray'),
+                                'callback_data' => "/xray",
+                            ],
+                            [
+                                'text'          => $this->i18n('naive'),
+                                'callback_data' => "/menu naive",
+                            ],
+                        ],
+                        [
+                            [
+                                'text'          => $this->i18n('ocserv'),
+                                'callback_data' => "/menu oc",
+                            ],
+                            [
+                                'text'          => $this->i18n('mtproto'),
+                                'callback_data' => "/mtproto",
+                            ],
+                        ],
+                        [
+                            [
+                                'text'          => $this->i18n('ad_title'),
+                                'callback_data' => "/menu adguard",
+                            ],
+                            [
+                                'text'          => $this->i18n('warp'),
+                                'callback_data' => "/warp",
+                            ],
+                        ],
+                        [
+                            [
+                                'text'          => $this->i18n('sh_title'),
+                                'callback_data' => "/menu ss",
+                            ],
+                            [
+                                'text'          => $this->i18n('pac'),
+                                'callback_data' => "/pacMenu 0",
+                            ],
                         ],
                     ],
+                    [array_merge(
+                        [
+                            [
+                                'text'          => $this->i18n('Hysteria'),
+                                'callback_data' => "/menu hy",
+                            ],
+                        ],
+                        $conf['showdnstt'] ? [
+                            [
+                                'text'          => $this->i18n('DNSTT'),
+                                'callback_data' => "/dnstt",
+                            ],
+                        ] : [],
+                    )],
                     [
                         [
-                            'text'          => $this->i18n('xray'),
-                            'callback_data' => "/xray",
+                            [
+                                'text'          => $this->i18n('config'),
+                                'callback_data' => "/menu config",
+                            ],
                         ],
                         [
-                            'text'          => $this->i18n('naive'),
-                            'callback_data' => "/menu naive",
+                            [
+                                'text' => $this->i18n('chat'),
+                                'url'  => base64_decode('aHR0cHM6Ly90Lm1lLys0RzMtUTRkX3ZGRXhPRGN5'),
+                            ],
+                            [
+                                'text' => $this->i18n('donate'),
+                                'web_app' => [
+                                    'url'  => "https://$domain/webapp$hash/donate.html",
+                                ]
+                            ],
                         ],
                     ],
-                    [
-                        [
-                            'text'          => $this->i18n('ocserv'),
-                            'callback_data' => "/menu oc",
-                        ],
-                        [
-                            'text'          => $this->i18n('mtproto'),
-                            'callback_data' => "/mtproto",
-                        ],
-                    ],
-                    [
-                        [
-                            'text'          => $this->i18n('ad_title'),
-                            'callback_data' => "/menu adguard",
-                        ],
-                        [
-                            'text'          => $this->i18n('warp'),
-                            'callback_data' => "/warp",
-                        ],
-                    ],
-                    [
-                        [
-                            'text'          => $this->i18n('sh_title'),
-                            'callback_data' => "/menu ss",
-                        ],
-                        [
-                            'text'          => $this->i18n('pac'),
-                            'callback_data' => "/pacMenu 0",
-                        ],
-                    ],
-                    [
-                        [
-                            'text'          => $this->i18n('Hysteria'),
-                            'callback_data' => "/menu hy",
-                        ],
-                    ],
-                    [
-                        [
-                            'text'          => $this->i18n('config'),
-                            'callback_data' => "/menu config",
-                        ],
-                    ],
-                    [
-                        [
-                            'text' => $this->i18n('chat'),
-                            'url'  => base64_decode('aHR0cHM6Ly90Lm1lLys0RzMtUTRkX3ZGRXhPRGN5'),
-                        ],
-                        [
-                            'text' => $this->i18n('donate'),
-                            'web_app' => [
-                                'url'  => "https://$domain/webapp$hash/donate.html",
-                            ]
-                        ],
-                    ],
-                ],
+                )
             ],
             'wg'           => $type == 'wg'      ? $this->statusWg($arg)                   : false,
             'client'       => $type == 'client'  ? $this->getClient(...explode('_', $arg)) : false,
