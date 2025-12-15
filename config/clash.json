@@ -99,7 +99,7 @@
             "list": "~block~",
             "action": "REJECT",
             "interval": 60,
-            "behavior": "domain",
+            "behavior": "classical",
             "name": "block"
         },
         {
@@ -131,7 +131,7 @@
             "list": "~pac~",
             "action": "PROXY",
             "interval": 60,
-            "behavior": "domain",
+            "behavior": "classical",
             "name": "pac"
         },
         {
@@ -139,7 +139,7 @@
             "list": "~subnet~",
             "action": "PROXY",
             "interval": 60,
-            "behavior": "ipcidr",
+            "behavior": "classical",
             "name": "subnet"
         },
         {
