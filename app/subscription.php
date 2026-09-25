@@ -6,7 +6,10 @@ $metaDescription = (string) ($pacConfig['subscription_meta_description'] ?? 'Sec
 $supportUrl = (string) ($pacConfig['subscription_support_url'] ?? 'https://t.me/example_support');
 $brandingTitle = (string) ($pacConfig['subscription_branding_title'] ?? 'VPN Service');
 $brandingLogoUrl = (string) ($pacConfig['subscription_branding_logo_url'] ?? 'https://example.com/logo.svg');
-$subscription_url = preg_replace("/<a href='([^']+)'>.*<\/a>/", '$1', $suburl);
+$subscription_url = (string) $suburl;
+if (preg_match('~<a\s+href=["\']([^"\']+)["\']~i', $subscription_url, $m)) {
+    $subscription_url = html_entity_decode($m[1], ENT_QUOTES | ENT_HTML5, 'UTF-8');
+}
 $ua = $_SERVER['HTTP_USER_AGENT'] ?? '';
 $username = htmlspecialchars($email ?? '', ENT_QUOTES, 'UTF-8');
 $connectedDevices = method_exists($this, 'getHwidDevicesByUser') ? ($this->getHwidDevicesByUser($uid) ?: []) : [];
@@ -31,6 +34,7 @@ foreach ($connectedDevices as $deviceHwid => $deviceInfo) {
         'device_os' => (string)($deviceInfo['device_os'] ?? ''),
         'os_version' => (string)($deviceInfo['os_version'] ?? ''),
         'device_model' => (string)($deviceInfo['device_model'] ?? ''),
+        'device_name' => (string)($deviceInfo['device_name'] ?? ''),
         'time' => (int)($deviceInfo['time'] ?? 0),
         'traffic_total' => (int)($deviceTrafficMap[$hwidKey]['total'] ?? 0),
         'traffic_upload' => (int)($deviceTrafficMap[$hwidKey]['upload'] ?? 0),
@@ -40,7 +44,6 @@ foreach ($connectedDevices as $deviceHwid => $deviceInfo) {
 $appsConfigUrl = (string) ($pacConfig['subscription_apps_config_url'] ?? 'https://cdn.jsdelivr.net/gh/TrimXx/config@main/onlyhwidapp.json');
 $trafficLimitBytes = isset($trafficLimitBytes) ? (int) $trafficLimitBytes : 0;
 $trafficLimitHuman = $trafficLimitHuman ?? '0';
-$inboundServerStats = isset($inboundServerStats) && is_array($inboundServerStats) ? $inboundServerStats : [];
 // Переменные для страницы подписки vpnbot
 /*
     $suburl - ссылка на страницу подписки пользователя
@@ -89,31 +92,31 @@ function isBrowser(string $userAgent): bool {
 function generate_panelData(
     string $uid,
     string $download,
+    string $upload,
     string $email,
     string $vless,
+    array $vlessChildLinks,
+    array $backupUrls,
     string $subscription_url,
     string $clash,
     string $singbox,
     string $windows,
     string $xray,
     string $wgconf,
-    ?int $expire = null, // Может быть null или timestamp
+    ?int $expire = null,
     array $connectedDevices = [],
     int $connectedDevicesMax = 0,
     bool $hasDeviceDeletePassword = false,
     string $trafficLimitHuman = '0',
-    string $trafficLimitBytesStr = '0',
-    array $inboundServerStats = []
+    string $trafficLimitBytesStr = '0'
 ): string {
     $happ_cryptolink = 'happ://add/' . $subscription_url;
 
-    $links = [
-        (string)$vless,
-        $clash   . '#mihomo conf',
-        $singbox . '#sing-box conf',
-        $windows . '#sing-box windows script',
-        $xray    . '#xray conf',
-    ];
+    $links = [(string)$vless];
+    foreach ($vlessChildLinks as $childLink) {
+        $links[] = (string)$childLink;
+    }
+    $links[] = $clash . '#mihomo conf';
     if (!empty($wgconf)) {
         $links[] = $wgconf . '#amnezia wg conf';
     }
@@ -135,6 +138,8 @@ function generate_panelData(
                 'shortUuid' => (string)$uid,
                 'daysLeft' => $daysLeft,
                 'trafficUsed' => (string)$download,
+                'trafficDownload' => (string)$download,
+                'trafficUpload' => (string)$upload,
                 'trafficLimit' => ($trafficLimitHuman !== '0' && $trafficLimitHuman !== '') ? $trafficLimitHuman : '0',
                 'trafficLimitBytes' => $trafficLimitBytesStr,
                 'username' => (string)$email,
@@ -145,11 +150,11 @@ function generate_panelData(
                 'connectedDevices' => $connectedDevices,
                 'connectedDevicesMax' => $connectedDevicesMax,
                 'hasDeviceDeletePassword' => $hasDeviceDeletePassword,
-                'inboundServerStats' => $inboundServerStats,
             ],
             'links' => $links,
             'ssConfLinks' => new stdClass(),
             'subscriptionUrl' => $subscription_url . '#' . $email,
+            'backupUrls' => $backupUrls,
             'happ' => [
                 'cryptoLink' => $happ_cryptolink,
             ],
@@ -183,7 +188,7 @@ function parse_traffic_to_bytes($traffic_str): int {
 }
 
 // Функция для отправки общих заголовков профиля
-function send_profile_headers(string $email, string $subscription_url, string $supportUrl, $download, $expire, string $announce): void {
+function send_profile_headers(string $email, string $subscription_url, string $supportUrl, $download, $upload, $expire, string $announce): void {
     // Основные заголовки
     header('x-robots-tag: noindex, nofollow, noarchive, nosnippet, noimageindex');
     header('profile-title: base64:' . base64_encode(substr($email, 0, 25)));
@@ -191,9 +196,9 @@ function send_profile_headers(string $email, string $subscription_url, string $s
     header('profile-web-page-url: ' . $subscription_url);
 
     // Заголовок с информацией о пользователе
-    $uploadBytes = 0;
+    $uploadBytes = parse_traffic_to_bytes($upload ?? '0');
     $downloadBytes = parse_traffic_to_bytes($download ?? '0');
-    $totalBytes = 0;
+    $totalBytes = $uploadBytes + $downloadBytes;
     $expireTimestamp = (!empty($expire) && is_numeric($expire)) ? (int)$expire : 0;
     $userInfo = "upload={$uploadBytes}; download={$downloadBytes}; total={$totalBytes}; expire={$expireTimestamp}";
     header('subscription-userinfo: ' . $userInfo);
@@ -211,39 +216,27 @@ function send_profile_headers(string $email, string $subscription_url, string $s
     header('flclashx-view: type:list; sort:none; layout:standard; icon:standard; card:min');
 }
 
-$panelData = generate_panelData($uid, $download, $email, $vless, $subscription_url, $clash, $singbox, $windows, $xray, $wgconf ?? '', $expire, $connectedDevicesList, $connectedDevicesMax, !empty($hasDeviceDeletePassword), $trafficLimitHuman, (string) $trafficLimitBytes, $inboundServerStats);
+$panelData = generate_panelData($uid, $download, $upload, $email, $vless, $vlessChildLinks, $backupUrls, $subscription_url, $clash, $singbox, $windows, $xray, $wgconf ?? '', $expire, $connectedDevicesList, $connectedDevicesMax, !empty($hasDeviceDeletePassword), $trafficLimitHuman, (string) $trafficLimitBytes);
 $panelDataB64 = $panelData; // Already base64 encoded
 
 switch (true) {
     case preg_match('~^(?:[Kk]oala-[Cc]lash|FlClashX|prizrak-box)~iu', $ua):
-        send_profile_headers($email, $subscription_url, $supportUrl, $download, $expire, $announce);
+        send_profile_headers($email, $subscription_url, $supportUrl, $download, $upload, $expire, $announce);
         header('Content-type: text/yaml');
         echo $configs['clash'];
         break;
 
     case preg_match('~Happ/~', $ua):
-        send_profile_headers($email, $subscription_url, $supportUrl, $download, $expire, $announce);
+        send_profile_headers($email, $subscription_url, $supportUrl, $download, $upload, $expire, $announce);
         header('routing: happ://routing/onadd/eyJOYW1lIjoiU2ltcGxlLVJVLXJvdXRpbmciLCJHbG9iYWxQcm94eSI6InRydWUiLCJSZW1vdGVETlNUeXBlIjoiRG9VIiwiUmVtb3RlRE5TRG9tYWluIjoiaHR0cHM6Ly9kbnMuYWRndWFyZC1kbnMuY29tL2Rucy1xdWVyeSIsIlJlbW90ZUROU0lQIjoiOTQuMTQwLjE0LjE0IiwiRG9tZXN0aWNETlNUeXBlIjoiRG9VIiwiRG9tZXN0aWNETlNEb21haW4iOiJodHRwczovL2Rucy5hZGd1YXJkLWRucy5jb20vZG5zLXF1ZXJ5IiwiRG9tZXN0aWNETlNJUCI6Ijk0LjE0MC4xNS4xNSIsIkdlb2lwdXJsIjoiaHR0cHM6Ly9naXRodWIuY29tL2ZyYXlaVi9zaW1wbGUtcnUtZ2VvaXAvcmVsZWFzZXMvbGF0ZXN0L2Rvd25sb2FkL2dlb2lwLmRhdCIsIkdlb3NpdGV1cmwiOiJodHRwczovL2dpdGh1Yi5jb20vZnJheVpWL3NpbXBsZS1ydS1nZW9zaXRlL3JlbGVhc2VzL2xhdGVzdC9kb3dubG9hZC9nZW9zaXRlLmRhdCIsIkxhc3RVcGRhdGVkIjoiMTc1MTY4MTM4MiIsIkRuc0hvc3RzIjp7fSwiRGlyZWN0U2l0ZXMiOlsiZ2Vvc2l0ZTpwcml2YXRlIiwiZ2Vvc2l0ZTpjYXRlZ29yeS1ydSIsImdlb3NpdGU6YXBwbGUiLCJnZW9zaXRlOnR3aXRjaCJdLCJEaXJlY3RJcCI6WyJnZW9pcDpydSIsImdlb2lwOnByaXZhdGUiXSwiUHJveHlTaXRlcyI6WyJnZW9zaXRlOnlvdXR1YmUiLCJnZW9zaXRlOmNhdGVnb3J5LWJhbi1ydSJdLCJQcm94eUlwIjpbXSwiQmxvY2tTaXRlcyI6W10sIkJsb2NrSXAiOltdLCJEb21haW5TdHJhdGVneSI6IklQSWZOb25NYXRjaCIsIkZha2VETlMiOiJmYWxzZSIsIlVzZUNodW5rRmlsZXMiOiJ0cnVlIn0=');
         header('Content-type: text/plain');
-        echo base64_encode($vless);
+        echo base64_encode($vlessLinks);
         break;
 
     case preg_match('~^(?:FlClash|[Cc]lash-[Vv]erge|[Cc]lash-?[Mm]eta|[Mm]urge|[Cc]lashX [Mm]eta|[Mm]ihomo|[Cc]lash-nyanpasu|clash\.meta)~iu', $ua):
-        send_profile_headers($email, $subscription_url, $supportUrl, $download, $expire, $announce);
+        send_profile_headers($email, $subscription_url, $supportUrl, $download, $upload, $expire, $announce);
         header('Content-type: text/yaml');
         echo $configs['clash'];
-        break;
-
-    case preg_match('~(?:SFA|SFI|SFM|SFT|[Rr]abbit[Hh]ole)/\d+\.\d+\.\d+(?:-beta\.\d+)?~', $ua):
-        send_profile_headers($email, $subscription_url, $supportUrl, $download, $expire, $announce);
-        header('Content-type: application/json');
-        echo $configs['singbox'];
-        break;
-
-    case preg_match('~^(?:[Ss]treisand|ktor-client|V2Box|io\.github\.saeeddev94\.xray/)~', $ua):
-        send_profile_headers($email, $subscription_url, $supportUrl, $download, $expire, $announce);
-        header('Content-type: application/json');
-        echo $configs['xray'];
         break;
 
     case isBrowser($ua):
@@ -380,25 +373,6 @@ switch (true) {
     .connected-device-hwid {
         white-space: nowrap;
         word-break: normal;
-    }
-}
-
-.inbound-stats-card .inbound-stat-row {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    padding: 8px 0;
-    border-bottom: 1px solid var(--border);
-    font-size: 14px;
-}
-.inbound-stats-card .inbound-stat-row:last-child {
-    border-bottom: none;
-}
-@media (min-width: 640px) {
-    .inbound-stats-card .inbound-stat-row {
-        flex-direction: row;
-        justify-content: space-between;
-        align-items: center;
     }
 }
 
@@ -1444,6 +1418,28 @@ body {
         </div>
     </div>
 
+    <!-- Support Modal -->
+    <div class="modal" id="supportModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div class="modal-title" id="supportModalTitle">Support</div>
+                <button class="modal-close" onclick="closeModal('supportModal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="supportThread" style="display: grid; gap: 8px; max-height: 45vh; overflow-y: auto; margin-bottom: 12px;"></div>
+                <textarea id="supportInput" rows="3" style="width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); color: var(--text); resize: vertical; font-family: inherit;"></textarea>
+                <div style="display: grid; gap: 6px;">
+                    <label id="supportContactLabel" style="font-size: 13px; color: var(--text-secondary);">Contact</label>
+                    <input id="supportContactInput" type="text" class="input" style="width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); color: var(--text);" placeholder="Telegram / email / WhatsApp (optional)" autocomplete="off">
+                </div>
+                <div style="display:flex; justify-content:flex-end; gap:8px; margin-top: 10px;">
+                    <button class="btn" id="supportCancelBtn" onclick="closeModal('supportModal')">Cancel</button>
+                    <button class="btn btn-primary" id="supportSendBtn" onclick="sendSupportMessage()">Send</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Delete Device Modal -->
     <div class="modal" id="deleteDeviceModal">
         <div class="modal-content">
@@ -1472,6 +1468,7 @@ body {
     <script>
         // Global state
         let panelData = null;
+        const SUB_ACTION_TOKEN = <?= json_encode($subscriptionActionToken ?? '', JSON_UNESCAPED_UNICODE) ?>;
         let appConfig = null;
         let currentLanguage = 'en';
         let currentPlatform = 'ios';
@@ -1824,12 +1821,6 @@ oh/uZMozC65SmDw+N5p6Su8CAwEAAQ==
                 vi: 'Tự động', es: 'Auto', ja: '自動', be: 'Аўта', pt: 'Auto',
                 uk: 'Авто', pl: 'Auto', id: 'Otomatis', tk: 'Awto', th: 'อัตโนมัติ'
             },
-            inboundServerTitle: {
-                en: 'Inbound traffic (whole server)', ru: 'Трафик по входам (весь сервер)',
-            },
-            inboundServerHint: {
-                en: 'Counters include all users on this inbound.', ru: 'Учитываются все клиенты на этом входе.',
-            }
         };
 
         // Language emojis for selector
@@ -1872,13 +1863,13 @@ oh/uZMozC65SmDw+N5p6Su8CAwEAAQ==
             const branding = appConfig?.brandingSettings;
             let html = '';
 
-            // Support button (if supportUrl exists)
-            if (branding?.supportUrl) {
-                const isTelegramUrl = branding.supportUrl.startsWith('https://t.me');
+            // Support button (always shown — opens the in-page support form)
+            {
+                const isTelegramUrl = (branding?.supportUrl || '').startsWith('https://t.me');
                 const supportIcon = isTelegramUrl
                     ? `<svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/></svg>`
                     : `<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>`;
-                html += `<button class="btn btn-icon" onclick="openLink('${escapeForAttribute(branding.supportUrl)}')">${supportIcon}<span class="btn-text">${getHardcodedText('support')}</span></button>`;
+                html += `<button class="btn btn-icon" onclick="openSupportModal()">${supportIcon}<span class="btn-text">${getHardcodedText('support')}</span></button>`;
             }
 
             // Settings button
@@ -2040,7 +2031,9 @@ oh/uZMozC65SmDw+N5p6Su8CAwEAAQ==
                 html += renderSubscriptionInfo(infoBlockType);
             }
             html += renderConnectedDevicesSection();
-            html += renderInboundServerStatsSection();
+
+            // Backup (child-node) subscription links, labeled with buttons
+            html += renderBackupSection();
 
             // Render installation section
             html += renderInstallationSection();
@@ -2063,8 +2056,10 @@ oh/uZMozC65SmDw+N5p6Su8CAwEAAQ==
 
             // Format traffic
             const trafficUsed = user.trafficUsed || '0 B';
+            const trafficDownload = user.trafficDownload || trafficUsed;
+            const trafficUpload = user.trafficUpload || '0 B';
             const trafficLimit = user.trafficLimit === "0" ? '∞' : user.trafficLimit;
-            const bandwidth = `${trafficUsed} / ${trafficLimit}`;
+            const bandwidth = `⬇ ${trafficDownload} · ⬆ ${trafficUpload} / ${trafficLimit}`;
 
             // Get expiry text
             let expiryText = t('indefinitely') || 'Indefinitely';
@@ -2093,7 +2088,9 @@ oh/uZMozC65SmDw+N5p6Su8CAwEAAQ==
             const badgeText = maxDevices > 0 ? `${devices.length} / ${maxDevices}` : `${devices.length}`;
 
             const rows = devices.map(device => {
+                const customName = String(device.device_name || '').trim();
                 const model = escapeHtml(device.device_model || '-');
+                const title = escapeHtml(customName || model);
                 const os = escapeHtml(device.device_os || '-');
                 const osVersion = escapeHtml(device.os_version || '');
                 const hwid = escapeHtml(device.hwid || '-');
@@ -2107,7 +2104,7 @@ oh/uZMozC65SmDw+N5p6Su8CAwEAAQ==
                 return `
                     <div class="link-item connected-device-card">
                         <div class="connected-device-main">
-                            <div class="connected-device-title" title="${model}">📱 ${model}</div>
+                            <div class="connected-device-title" title="${title}">📱 ${title}</div>
                             <div class="connected-device-hwid" title="${hwid}">🔑 ${hwid}</div>
                             <div class="connected-device-traffic">⬇ ${trafficDownload} · ⬆ ${trafficUpload}</div>
                         </div>
@@ -2117,6 +2114,7 @@ oh/uZMozC65SmDw+N5p6Su8CAwEAAQ==
                             <div class="connected-device-time">🕒 ${lastSeen}</div>
                         </div>
                         <div class="connected-device-actions">
+                            <button type="button" class="btn btn-sm" style="padding: 6px 12px;" onclick="renameDeviceByHwid('${escapeForAttribute(device.hwid || '')}', '${escapeForAttribute(customName || model)}')">✏️</button>
                             <button type="button" class="btn btn-sm" style="padding: 6px 12px; border-color: var(--error); color: var(--error);" onclick="deleteDeviceByHwid('${escapeForAttribute(device.hwid || '')}')">🗑️</button>
                         </div>
                     </div>
@@ -2135,30 +2133,6 @@ oh/uZMozC65SmDw+N5p6Su8CAwEAAQ==
                         </div>
                     </div>
                     <div class="card-content" style="display: none;">
-                        ${rows}
-                    </div>
-                </div>
-            `;
-        }
-
-        function renderInboundServerStatsSection() {
-            const stats = panelData?.response?.user?.inboundServerStats;
-            if (!Array.isArray(stats) || stats.length === 0) {
-                return '';
-            }
-            const title = getHardcodedText('inboundServerTitle');
-            const hint = getHardcodedText('inboundServerHint');
-            const rows = stats.map(s => {
-                const tag = escapeHtml(s.tag || '');
-                const d = formatBytes(Number(s.download) || 0);
-                const u = formatBytes(Number(s.upload) || 0);
-                return `<div class="inbound-stat-row"><span><strong>${tag}</strong></span><span>⬇ ${d} · ⬆ ${u}</span></div>`;
-            }).join('');
-            return `
-                <div class="card user-info inbound-stats-card" style="margin-bottom: 20px;">
-                    <div class="card-header"><span>${title}</span></div>
-                    <div class="card-content">
-                        <p style="font-size: 12px; color: var(--text-secondary); margin-bottom: 8px;">${hint}</p>
                         ${rows}
                     </div>
                 </div>
@@ -2188,6 +2162,9 @@ oh/uZMozC65SmDw+N5p6Su8CAwEAAQ==
             const url = baseUrl + (baseUrl.includes('?') ? '&' : '?') + `action=${encodeURIComponent(action)}`;
             const body = new URLSearchParams();
             Object.entries(payload).forEach(([k, v]) => body.append(k, String(v ?? '')));
+            if (SUB_ACTION_TOKEN) {
+                body.append('action_token', SUB_ACTION_TOKEN);
+            }
             const res = await fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
@@ -2198,6 +2175,93 @@ oh/uZMozC65SmDw+N5p6Su8CAwEAAQ==
                 throw new Error(data?.message || `HTTP ${res.status}`);
             }
             return data;
+        }
+
+        function supportL10n() {
+            const ru = currentLanguage === 'ru';
+            return {
+                title: ru ? 'Поддержка' : 'Support',
+                placeholder: ru ? 'Опиши проблему…' : 'Describe your issue…',
+                contactLabel: ru ? 'Контакт (необязательно)' : 'Contact (optional)',
+                contactPlaceholder: ru ? 'Telegram / email / WhatsApp' : 'Telegram / email / WhatsApp',
+                send: ru ? 'Отправить' : 'Send',
+                cancel: ru ? 'Отмена' : 'Cancel',
+                empty: ru ? 'Сообщений пока нет.' : 'No messages yet.',
+                sent: ru ? 'Отправлено. Ответ появится здесь после обновления.' : 'Sent. The reply will appear here on refresh.',
+                error: ru ? 'Не удалось отправить. Попробуй позже.' : 'Could not send. Try again later.',
+                you: ru ? 'Вы' : 'You',
+                support: ru ? 'Поддержка' : 'Support'
+            };
+        }
+
+        function renderSupportThread(messages) {
+            const box = document.getElementById('supportThread');
+            if (!box) return;
+            const t = supportL10n();
+            if (!messages || !messages.length) {
+                box.innerHTML = `<div style="color: var(--text-secondary); font-size: 13px;">${t.empty}</div>`;
+                return;
+            }
+            const esc = (s) => String(s == null ? '' : s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+            box.innerHTML = messages.map((m) => {
+                const mine = m.from !== 'admin';
+                const bg = mine ? 'var(--bg)' : 'rgba(59,130,246,0.12)';
+                return `<div style="padding:8px 10px; border-radius:10px; background:${bg}; border:1px solid var(--border);">
+                    <div style="font-size:11px; color: var(--text-secondary); margin-bottom:4px;">${mine ? t.you : t.support}</div>
+                    <div style="white-space:pre-wrap; word-break:break-word; font-size:14px;">${esc(m.text)}</div>
+                </div>`;
+            }).join('');
+            box.scrollTop = box.scrollHeight;
+        }
+
+        async function loadSupportThread() {
+            try {
+                const data = await postSubscriptionAction('support_thread');
+                renderSupportThread(data && data.messages ? data.messages : []);
+            } catch (e) {
+                renderSupportThread([]);
+            }
+        }
+
+        function openSupportModal() {
+            const t = supportL10n();
+            const set = (id, prop, value) => { const el = document.getElementById(id); if (el) el[prop] = value; };
+            set('supportModalTitle', 'textContent', t.title);
+            set('supportInput', 'placeholder', t.placeholder);
+            set('supportContactLabel', 'textContent', t.contactLabel);
+            set('supportContactInput', 'placeholder', t.contactPlaceholder);
+            set('supportSendBtn', 'textContent', t.send);
+            set('supportCancelBtn', 'textContent', t.cancel);
+            const input = document.getElementById('supportInput');
+            if (input) input.value = '';
+            const contact = document.getElementById('supportContactInput');
+            if (contact) contact.value = '';
+            renderSupportThread([]);
+            openModal('supportModal');
+            loadSupportThread();
+        }
+
+        async function sendSupportMessage() {
+            const t = supportL10n();
+            const input = document.getElementById('supportInput');
+            const text = (input && input.value ? input.value : '').trim();
+            if (!text) return;
+            const contactInput = document.getElementById('supportContactInput');
+            const contact = (contactInput && contactInput.value ? contactInput.value : '').trim();
+            const btn = document.getElementById('supportSendBtn');
+            if (btn) btn.disabled = true;
+            try {
+                const payload = { message: text };
+                if (contact) payload.contact = contact;
+                await postSubscriptionAction('support_send', payload);
+                if (input) input.value = '';
+                if (contactInput) contactInput.value = '';
+                await loadSupportThread();
+            } catch (e) {
+                renderSupportThread([{ from: 'admin', text: t.error }]);
+            } finally {
+                if (btn) btn.disabled = false;
+            }
         }
 
         async function configureDeviceDeletePassword() {
@@ -2259,6 +2323,31 @@ oh/uZMozC65SmDw+N5p6Su8CAwEAAQ==
             }
         }
 
+        async function renameDeviceByHwid(hwid, currentName) {
+            const safeHwid = String(hwid || '').trim();
+            if (!safeHwid) return;
+            const promptText = currentLanguage === 'ru' ? 'Новое имя устройства:' : 'New device name:';
+            const nextName = window.prompt(promptText, String(currentName || '').trim());
+            if (nextName === null) return;
+            const name = String(nextName).trim();
+            if (!name) {
+                showToast(currentLanguage === 'ru' ? 'Введите имя' : 'Enter a name');
+                return;
+            }
+            try {
+                const data = await postSubscriptionAction('device_rename', { hwid: safeHwid, name });
+                const devices = panelData?.response?.user?.connectedDevices || [];
+                const device = devices.find(d => (d?.hwid || '') === safeHwid);
+                if (device) {
+                    device.device_name = data?.device_name || name;
+                }
+                renderContent();
+                showToast(currentLanguage === 'ru' ? 'Имя сохранено' : 'Name saved');
+            } catch (e) {
+                showToast((currentLanguage === 'ru' ? 'Ошибка: ' : 'Error: ') + (e?.message || 'unknown'));
+            }
+        }
+
         async function deleteDeviceByHwid(hwid) {
             const safeHwid = String(hwid || '').trim();
             if (!safeHwid) return;
@@ -2313,7 +2402,7 @@ oh/uZMozC65SmDw+N5p6Su8CAwEAAQ==
                 infoRows += `
                     <div class="info-row"><span class="info-label">${t('expires') || 'Expires'}</span><span class="info-value">${expiryText}</span></div>
                     ${!isNeverExpires ? `<div class="info-row"><span class="info-label">${daysLeftTranslations[currentLanguage] || daysLeftTranslations.en}</span><span class="info-value">${user.daysLeft || 0}</span></div>` : ''}
-                    <div class="info-row"><span class="info-label">${t('bandwidth') || 'Traffic used'}</span><span class="info-value">${user.trafficUsed || '0 B'} / ${trafficLimit}</span></div>
+                    <div class="info-row"><span class="info-label">${t('bandwidth') || 'Traffic used'}</span><span class="info-value">${bandwidth}</span></div>
                 `;
             }
 
@@ -2993,6 +3082,48 @@ oh/uZMozC65SmDw+N5p6Su8CAwEAAQ==
             `;*/
         }
 
+        function renderBackupSection() {
+            const backups = panelData?.response?.backupUrls;
+            if (!Array.isArray(backups) || backups.length === 0) return '';
+
+            const title = currentLanguage === 'ru' ? 'Резервная подписка' : 'Backup subscription';
+            const hint = currentLanguage === 'ru'
+                ? 'Если основная ссылка не открывается в клиенте — откройте ту же подписку на резервном сервере и скопируйте ссылку оттуда.'
+                : 'If the main link does not open in your client, open the same subscription on the backup server and copy the link from there.';
+            const openText = currentLanguage === 'ru' ? 'Открыть' : 'Open';
+            const copyText = currentLanguage === 'ru' ? 'Скопировать' : 'Copy';
+
+            const items = backups.map(b => {
+                const domain = escapeHtml(b?.domain || '');
+                const url = String(b?.url || '');
+                if (!url) return '';
+                return `
+                    <div class="link-item" style="align-items: center;">
+                        <div class="link-info">
+                            <span class="badge" style="background: var(--primary-color); color: white; margin-right: 8px;">${escapeHtml(title)}</span>
+                            <span style="font-weight: 600;">${domain}</span>
+                        </div>
+                        <div class="link-actions">
+                            <button class="btn btn-sm btn-primary" onclick="openSubscriptionUrl('${escapeForAttribute(url)}')" aria-label="${escapeForAttribute(openText)} — ${escapeForAttribute(b?.domain || '')}">${openText}</button>
+                            <button class="btn btn-sm copy-btn" data-copy-text="${escapeHtml(url)}" aria-label="${escapeForAttribute(copyText)} — ${escapeForAttribute(b?.domain || '')}">${copyText}</button>
+                        </div>
+                    </div>`;
+            }).join('');
+
+            if (!items) return '';
+
+            return `
+                <div class="card">
+                    <div class="card-header">
+                        <span>${escapeHtml(title)}</span>
+                    </div>
+                    <div class="card-content">
+                        <p style="margin: 0 0 12px; opacity: 0.7;">${escapeHtml(hint)}</p>
+                        ${items}
+                    </div>
+                </div>`;
+        }
+
         function toggleLinksSection() {
             const section = document.getElementById('linksSection');
             if (section) section.classList.toggle('open');
@@ -3270,8 +3401,8 @@ oh/uZMozC65SmDw+N5p6Su8CAwEAAQ==
         break;
 
     default:
-        send_profile_headers($email, $subscription_url, $supportUrl, $download, $expire, $announce);
+        send_profile_headers($email, $subscription_url, $supportUrl, $download, $upload, $expire, $announce);
         header('Content-type: text/plain');
-        echo base64_encode($vless);
+        echo base64_encode($vlessLinks);
         break;
 }

@@ -1,20 +1,16 @@
 <?php
 
-// ini_set('display_errors', 'On');
-// ini_set("log_errors", 1);
-// ini_set("error_log", '/logs/php_error');
+require_once __DIR__ . '/timezone.php';
 
-$debug = [
-    'raw'  => file_get_contents('php://input'),
-    'json' => json_decode(file_get_contents('php://input'), true),
-    'post' => $_POST,
-    'file' => $_FILES,
-];
-register_shutdown_function('exit_log', $debug);
-
-function exit_log($debug)
-{
-    $output            = ob_get_contents();
-    $debug['response'] = json_decode($output, true) ?: $output;
-    file_put_contents('/logs/requests', "\n" . date('Y-m-d H:i:s') . "\n" . var_export($debug, true) . "\n", FILE_APPEND);
+if (!vpnbot_requests_logging_enabled()) {
+    return;
 }
+
+$GLOBALS['debug'] = true;
+
+register_shutdown_function(static function () {
+    $uri = $_SERVER['REQUEST_URI'] ?? '';
+    $method = $_SERVER['REQUEST_METHOD'] ?? '';
+    $line = date('Y-m-d H:i:s') . " {$method} {$uri}\n";
+    @file_put_contents('/logs/requests', $line, FILE_APPEND | LOCK_EX);
+});

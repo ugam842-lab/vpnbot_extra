@@ -1,6 +1,8 @@
-# VPNBot Extra
+# VPNBot Extra — форк ugam842
 
-Тест работоспособности апгрейда: `2.28.1 -> 2.29`.
+Telegram-бот для управления VPN-сервером: VLESS + Mihomo/Clash подписки, AWG (WG1), AdGuard, MTProto, Hysteria.
+
+Цепочка форков: [mercurykd/vpnbot](https://github.com/mercurykd/vpnbot) → [TrimXx/vpnbot_extra](https://github.com/TrimXx/vpnbot_extra) → этот форк. Доработан **ugam842 совместно с AI**.
 
 ## Русский
 
@@ -8,14 +10,15 @@ Telegram-бот для управления VPN-сервером из Telegram.
 
 **Руководство пользователя (RU):** [docs/USER_GUIDE_RU.md](docs/USER_GUIDE_RU.md) — как выдавать доступ, HWID, подписки, WG/AWG и типовые сценарии без технических деталей.
 
+**Переменные Clash-шаблонов:** [docs/CLASH_TEMPLATE_RU.md](docs/CLASH_TEMPLATE_RU.md) — плейсхолдеры `~domain~`, `~ws_path~`, порты, `auto-transports`, примеры.
+
 ### Что поддерживается
 
-- VLESS (`Reality` / `Websocket` / `Both`)
-- NaiveProxy
-- OpenConnect
-- WireGuard / AmneziaWG
+- VLESS transport registry (`Reality` / `Websocket` / `XHTTP` flags) + Mihomo/Clash подписки
+- WireGuard / AmneziaWG (только WG1)
 - AdGuardHome
 - MTProto
+- Hysteria
 - PAC / Rule-set
 - Автоматические SSL-сертификаты
 
@@ -27,13 +30,15 @@ Telegram-бот для управления VPN-сервером из Telegram.
 ### Установка
 
 ```shell
-wget -O- https://raw.githubusercontent.com/TrimXx/vpnbot_extra/master/scripts/init.sh | sh -s YOUR_TELEGRAM_BOT_KEY master
+wget -O- https://raw.githubusercontent.com/ugam842-lab/vpnbot_extra/master/scripts/init.sh | sh -s YOUR_TELEGRAM_BOT_KEY master
 ```
+
+При первом запуске создаются `.env` (из `env.defaults`), `config/` (из `config-templates/`) и `override.env`.
 
 ### Обновление (без токена бота)
 
 ```shell
-wget -O- https://raw.githubusercontent.com/TrimXx/vpnbot_extra/master/scripts/init.sh | sh -s -- master
+wget -O- https://raw.githubusercontent.com/ugam842-lab/vpnbot_extra/master/scripts/init.sh | sh -s -- master
 ```
 
 ### Важное по обновлениям
@@ -42,10 +47,18 @@ wget -O- https://raw.githubusercontent.com/TrimXx/vpnbot_extra/master/scripts/in
 - Для полного обновления репозитория используйте:
 
 ```shell
-UPGRADE_SCOPE=all wget -O- https://raw.githubusercontent.com/TrimXx/vpnbot_extra/master/scripts/init.sh | sh -s -- master
+UPGRADE_SCOPE=all wget -O- https://raw.githubusercontent.com/ugam842-lab/vpnbot_extra/master/scripts/init.sh | sh -s -- master
 ```
 
 - `make u` и `update/update.sh` обновлены для безопасного сценария: подтягиваются целевые кодовые пути (`app`, `update`, `makefile`, `version`) без wipe конфигов.
+
+### Конфигурация (важно)
+
+- **`config/`** — только на сервере, **не в git** (живые данные, секреты).
+- **`config-templates/`** — шаблоны в репозитории; при `make u` / `init.sh` скрипт `bootstrap_config.sh` создаёт недостающие файлы в `config/` без перезаписи существующих.
+- **`.env`** — не в git; при первом deploy копируется из `env.defaults` (порты WG1, MTProto, IMAGE и т.д.).
+- Локально можно держать полный слепок бота в `config/` — git его не видит.
+- Не используйте `git add -A` без проверки; `make c` для config удалён.
 
 ### Перезапуск
 
@@ -65,7 +78,7 @@ crontab -e
 @reboot cd /root/vpnbot_extra && make r
 ```
 
-### Основные доработки в форке
+### Основные доработки в форке (TrimXx → базовый слой)
 
 - HWID runtime mode: глобальный флаг + override на подписку.
 - Ленивая миграция на модель `1 устройство = 1 device UUID`.
@@ -73,25 +86,57 @@ crontab -e
 - Отображение подключенных устройств и трафика по устройствам в `subscription`.
 - Пароль на удаление устройства + смена/сброс пароля.
 - Заголовки ответа по HWID-статусу в выдаче подписки.
-- Транспорт `Both` (WS + Reality) и флаг доступа Reality по пользователю.
+- Глобальные и per-user transport флаги (`Reality` / `WS` / `XHTTP` / `Hysteria` / `AWG`).
 - Многодоменная схема (`domain_main + aliases`) и SAN-сертификаты.
 - Runtime AWG-профили по `device_uuid` (включая выдачу в Mihomo/Clash при наличии `device_uuid`).
 - Runtime AWG операции закреплены за WG1-контекстом.
-- Поддержка DNS-алиасов:
-  - вывод DoH/DoT по `main + aliases` в меню AdGuard;
-  - добавление DoH URL по алиасам в `dns.nameserver` для Clash-подписки.
-- Кнопка `change reality server ip/domain` теперь меняет только клиентский Reality `server` (bridge), не трогая `xray reality dest`.
-- Обновлен импорт бэкапа: `pac` восстанавливается merge-способом для совместимости старых/новых бэкапов и новых полей.
-- Обновлён скрипт `/mirror` (socat TCP/UDP, systemd сервисы, install/status/restart/logs/uninstall).
+- Поддержка DNS-алиасов (DoH/DoT по `main + aliases` в меню AdGuard и в Clash `dns.nameserver`).
+- Кнопка `change reality server ip/domain` меняет только клиентский Reality `server` (bridge), не трогая `xray reality dest`.
+- Обновлен импорт бэкапа: `pac` восстанавливается merge-способом для совместимости старых/новых бэкапов.
+
+### Доработки ugam842 (поверх v3-trimx)
+
+- **Мультисервер:** parent + child-ноды; VLESS-ссылки на child-ноду в подписке (retarget `sni`/`host` для TLS-транспортов), резервные URL подписки.
+- **VLESS Reality → XHTTP+Reality** для обхода ТСПУ; при выключенном Reality — XHTTP без TLS, чтобы устройство добавлялось корректно.
+- **Поддержка (support):** модель «профиль → треды» — несколько тредов на профиль, открытие/закрытие тредов с обеих сторон, ответ в тред из user-portal и из `/support`; в тикете админ видит ник + имя + Telegram ID; поле контакта (TG/email/WhatsApp) в заявке.
+- **Unbound-user stub:** непривязанный пользователь, написавший текст, получает заглушку «нет доступа» вместо тихого сброса.
+- **Уведомления об изменении подписки** админу + команда `/update` для подписки на обновления.
+- **Long-polling fallback** (`polling.php`) — режим работы без вебхука.
+- **Трафик up/down раздельно** в web-подписке.
+- **Иерархия админов:** только owner добавляет/удаляет админов.
+- **Broadcast** всем пользователям бота.
+- **Поиск конфига по имени** для админа (с привязкой к Telegram ID).
+- **Фикс выделения IP** для WG/Amnezia (пул заканчивался при 128 клиентах).
+- **Фикс удаления устройства** в портале.
+- **AmneziaWG 3.0** на сервере.
+
+### Roadmap (v3.x)
+
+- Модульность `bot.php`: HWID вынесен в `HwidTrait` (~1800 строк)
+- Legacy SS/OC/DNSTT/Naive: заглушки и `LegacyRemovedTrait`
+- Ускорение UI: кэш pac/xray/stats, blinkmenu in-place, `ackCallback` на меню
+- Подпись subscription URL (`sig` + epoch) и ротация в config
+- PAC decode: только legacy serialize с `allowed_classes => false`
+- Transport registry v3.1: порты WS/XHTTP/Reality в `pac.transport_registry.ports`
+
+### Деплой v3-trimx (runbook)
+
+1. Экспорт настроек через бот (**config → export**)
+2. `git pull` (или `UPGRADE_SCOPE=all` через `init.sh` для compose)
+3. `docker compose build wg1 php --no-cache`
+4. `docker compose up -d --remove-orphans`
+5. `bash scripts/migrate_awg2.sh` (сброс `wg1_amnezia_keys` в pac)
+6. `docker compose restart php xr wg1`
+7. Smoke: главное меню, подписка `?t=cl`, HWID + AWG Device в Mihomo, ручной AWG QR
 
 ### Заметка по бэкапу/восстановлению
 
-- Экспорт включает: `pac`, `xray`, `xraystats`, `hwid`, WG/WG1, AdGuard, сертификаты, MTProto, Hysteria, OC, Shadowsocks.
-- Импорт теперь сохраняет новые ключи `pac` при восстановлении старых бэкапов (через merge с текущими дефолтами).
+- Экспорт включает: `pac`, `xray`, `xraystats`, `hwid`, WG1, AdGuard, сертификаты, MTProto, Hysteria.
+- Импорт сохраняет новые ключи `pac` при восстановлении старых бэкапов (merge с текущими дефолтами).
 
-### AI notice
+### Авторы
 
-Часть исправлений и рефакторинга выполнена с помощью ИИ.
+Цепочка форков: [mercurykd/vpnbot](https://github.com/mercurykd/vpnbot) → [TrimXx/vpnbot_extra](https://github.com/TrimXx/vpnbot_extra) → этот форк. Доработки этого форка — **ugam842 совместно с AI**.
 
 ---
 
@@ -101,12 +146,11 @@ Telegram bot for managing a VPN server directly from Telegram.
 
 ### Supported stack
 
-- VLESS (`Reality` / `Websocket` / `Both`)
-- NaiveProxy
-- OpenConnect
-- WireGuard / AmneziaWG
+- VLESS transport registry (`Reality` / `Websocket` / `XHTTP` flags) + Mihomo/Clash subscriptions
+- WireGuard / AmneziaWG (WG1 only)
 - AdGuardHome
 - MTProto
+- Hysteria
 - PAC / Rule-set
 - Automatic SSL certificates
 
@@ -118,13 +162,13 @@ Telegram bot for managing a VPN server directly from Telegram.
 ### Install
 
 ```shell
-wget -O- https://raw.githubusercontent.com/TrimXx/vpnbot_extra/master/scripts/init.sh | sh -s YOUR_TELEGRAM_BOT_KEY master
+wget -O- https://raw.githubusercontent.com/ugam842-lab/vpnbot_extra/master/scripts/init.sh | sh -s YOUR_TELEGRAM_BOT_KEY master
 ```
 
 ### Upgrade (without bot token)
 
 ```shell
-wget -O- https://raw.githubusercontent.com/TrimXx/vpnbot_extra/master/scripts/init.sh | sh -s -- master
+wget -O- https://raw.githubusercontent.com/ugam842-lab/vpnbot_extra/master/scripts/init.sh | sh -s -- master
 ```
 
 ### Upgrade behavior
@@ -133,7 +177,7 @@ wget -O- https://raw.githubusercontent.com/TrimXx/vpnbot_extra/master/scripts/in
 - Full-repo upgrade is still available:
 
 ```shell
-UPGRADE_SCOPE=all wget -O- https://raw.githubusercontent.com/TrimXx/vpnbot_extra/master/scripts/init.sh | sh -s -- master
+UPGRADE_SCOPE=all wget -O- https://raw.githubusercontent.com/ugam842-lab/vpnbot_extra/master/scripts/init.sh | sh -s -- master
 ```
 
 - `make u` and `update/update.sh` are adjusted for safer upgrades: target code paths (`app`, `update`, `makefile`, `version`) are refreshed without wiping user configs.
@@ -156,7 +200,7 @@ Add:
 @reboot cd /root/vpnbot_extra && make r
 ```
 
-### Key fork improvements
+### Key fork improvements (TrimXx base layer)
 
 - HWID runtime mode with global and per-subscription override.
 - Lazy migration to `1 device = 1 device UUID`.
@@ -164,16 +208,39 @@ Add:
 - Connected device list and per-device traffic in subscription UI.
 - Device deletion password flow with change/reset support.
 - HWID status response headers in subscription endpoints.
-- `Both` transport mode (WS + Reality) with per-user Reality access control.
+- Global and per-user transport flags (`Reality` / `WS` / `XHTTP` / `Hysteria` / `AWG`).
 - Multi-domain support (`domain_main + aliases`) with SAN certificates.
 - Runtime AWG profiles bound to `device_uuid` (including Mihomo/Clash output when `device_uuid` is present).
 - Runtime AWG operations pinned to WG1 context.
-- DNS aliases support:
-  - DoH/DoT output for `main + aliases` in AdGuard menu;
-  - alias DoH URLs appended to Clash `dns.nameserver`.
-- `change reality server ip/domain` now changes only client-facing Reality `server` (bridge), without changing `xray reality dest`.
+- DNS aliases support (DoH/DoT output for `main + aliases` in AdGuard menu and Clash `dns.nameserver`).
+- `change reality server ip/domain` changes only client-facing Reality `server` (bridge), without changing `xray reality dest`.
 - Backup import improved: `pac` is restored via merge strategy for old/new backup compatibility.
 - `/mirror` script updated (socat TCP/UDP, systemd units, install/status/restart/logs/uninstall).
+
+### ugam842 fork improvements (on top of v3-trimx)
+
+- **Multi-server:** parent + child nodes; child-node VLESS links in the subscription (`sni`/`host` retarget for TLS transports), backup subscription URLs.
+- **VLESS Reality → XHTTP+Reality** to bypass TSPU; with Reality off — XHTTP without TLS, so the device is added correctly.
+- **Support:** profile→threads model — multiple threads per profile, open/close threads from both sides, reply-in-thread from user-portal and `/support`; admin sees nick + name + Telegram ID in a ticket; contact field (TG/email/WhatsApp) on the access request.
+- **Unbound-user stub:** a non-bound user typing text gets a "no access" stub instead of being silently dropped.
+- **Subscription-change notifications** to admin + `/update` command to subscribe.
+- **Long-polling fallback** (`polling.php`) — running without a webhook.
+- **Separate up/down traffic** in the web subscription.
+- **Admin hierarchy:** only the owner adds/removes admins.
+- **Broadcast** to all bot users.
+- **Client search by name** for admin (bound to Telegram ID).
+- **IP allocation fix** for WG/Amnezia (the pool ran out at 128 clients).
+- **Device deletion fix** in the portal.
+- **AmneziaWG 3.0** on the server.
+
+### Roadmap (v3.x)
+
+- Split `bot.php`: HWID logic moved to `HwidTrait` (~1800 lines)
+- Legacy SS/OC/DNSTT/Naive stubs via `LegacyRemovedTrait`
+- UI performance: pac/xray/stats cache, in-place blinkmenu, menu `ackCallback`
+- Subscription URL signing (`sig` + epoch) and rotation in config menu
+- PAC decode: legacy serialize only with `allowed_classes => false`
+- Transport registry v3.1: WS/XHTTP/Reality ports in `pac.transport_registry.ports`
 
 ### Backup / restore notes
 
