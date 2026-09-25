@@ -1,3 +1,5 @@
+ROOT := $(shell pwd)
+
 b:
 	docker compose build
 u: # запуск контейнеров
@@ -9,8 +11,10 @@ u: # запуск контейнеров
 		git checkout origin/$$branch -- app update makefile version || true; \
 	fi
 	bash ./update/update.sh &
+	bash ./scripts/bootstrap_config.sh
 	touch ./override.env ./docker-compose.override.yml ./config/location.conf ./config/override.conf
 	IP=$(IP) VER=$(VER) docker compose --env-file ./.env --env-file ./override.env up -d --force-recreate
+	@(sleep 8; docker compose exec -T php php /app/push_nodes.php both 35) >/dev/null 2>&1 &
 d: # остановка контейнеров
 	-kill -9 $(shell cat ./update/update_pid) > /dev/null
 	docker compose down --remove-orphans
@@ -27,30 +31,18 @@ wg: # консоль сервиса
 	docker compose exec wg /bin/sh
 wg1: # консоль сервиса
 	docker compose exec wg1 /bin/sh
-ss: # консоль сервиса
-	docker compose exec ss /bin/sh
 ng: # консоль сервиса
 	docker compose exec ng /bin/sh
-np: # консоль сервиса
-	docker compose exec np /bin/sh
-up: # консоль сервиса
-	docker compose exec up /bin/sh
 ad: # консоль сервиса
 	docker compose exec ad /bin/sh
 wp: # консоль сервиса
 	docker compose exec wp bash
-proxy: # консоль сервиса
-	docker compose exec proxy /bin/sh
 tg: # консоль сервиса
 	docker compose exec tg /bin/sh
-dnstt: # консоль сервиса
-	docker compose exec dnstt /bin/sh
 hy: # консоль сервиса
 	docker compose exec hy /bin/sh
 xr: # консоль сервиса
 	docker compose exec xr /bin/sh
-oc: # консоль сервиса
-	docker compose exec oc /bin/sh
 service: # консоль сервиса
 	docker compose exec service /bin/sh
 delete:
@@ -62,12 +54,12 @@ push:
 	docker compose push
 s:
 	git status -su
-c:
-	git add config/
-	git checkout .
-	git reset
 webhook:
 	docker compose exec php php checkwebhook.php
+polling: # запустить long-polling fallback (нужен polling_mode=1 в pac.json)
+	docker compose --profile polling up -d polling
+unpolling: # остановить long-polling fallback
+	docker compose --profile polling rm -sf polling
 reset:
 	make d
 	git reset --hard
@@ -76,7 +68,11 @@ reset:
 	make u
 backup:
 	docker compose exec php php backup.php > backup.json
+smoke:
+	bash ./scripts/smoke_check.sh
+diag:
+	bash ./scripts/diagnose_bot.sh
 cron: # установка задачи в cron для автозапуска при перезагрузке
-	@(crontab -l 2>/dev/null | grep -v "cd /root/vpnbot && make r"; echo "@reboot cd /root/vpnbot && make r") | crontab -
+	@(crontab -l 2>/dev/null | grep -v "cd $(ROOT) && make r"; echo "@reboot cd $(ROOT) && make r") | crontab -
 uncron: # удаление задачи из cron
-	@crontab -l 2>/dev/null | grep -v "cd /root/vpnbot && make r" | crontab -
+	@crontab -l 2>/dev/null | grep -v "cd $(ROOT) && make r" | crontab -

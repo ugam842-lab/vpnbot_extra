@@ -9,22 +9,8 @@
 !/app/zaprelists/.gitkeep
 /sftp-config.json
 /tg.pyr
-/config/wg0.conf
-/config/wg1.conf
-/config/hwid.json
-/config/xray.json
-/config/xray_backup.json
-/config/xray.stats
-/config/clients.json
-/config/clients1.json
-/config/mtprotosecret
-/config/mtprotodomain
-/config/pac.json
-/config/AdGuardHome.yaml
-/config/ocserv.passwd
-/config/deny
-/config/sslocal.json
-/config/ssserver.json
+/config/*
+!/config/.gitkeep
 /todo.todo
 /app/zapretlists/*
 !/app/zapretlists/.gitkeep
@@ -42,6 +28,8 @@ backup.json
 app/webapp/override/
 .rest
 .env
+/scratch/
+/singbox_windows/singbox.zip
 
 /subscription.php
 location.conf

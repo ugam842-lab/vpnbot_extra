@@ -38,15 +38,13 @@ services:
             - 443:443/tcp
             - 443:443/udp
         hostname: upstream
-        container_name: upstream-${VER}
+        container_name: up
         depends_on:
             ng:
                 condition: service_healthy
             xr:
                 condition: service_started
-            oc:
-                condition: service_started
-            np:
+            hy:
                 condition: service_started
         env_file:
             - path: ./.env
@@ -54,6 +52,13 @@ services:
             - path: ./override.env
               required: false
         stop_grace_period: 1s
+        restart: unless-stopped
+        healthcheck:
+            test: ["CMD-SHELL", "nc -z 127.0.0.1 443"]
+            interval: 15s
+            timeout: 3s
+            retries: 3
+            start_period: 10s
         command: ["/bin/sh", "/start_upstream.sh"]
         networks:
             default:
@@ -81,7 +86,8 @@ services:
         ports:
             - 80:80
         hostname: nginx
-        container_name: nginx-${VER}
+        container_name: ng
+        restart: unless-stopped
         env_file:
             - path: ./.env
               required: true # default
@@ -100,15 +106,16 @@ services:
                 condition: service_healthy
             ad:
                 condition: service_started
-            ss:
-                condition: service_started
             xr:
                 condition: service_started
         healthcheck:
-            test: ["CMD", "nginx", "-t"]
+            # 10.10.0.2:443 expects PROXY protocol; plain nc triggers "broken header" in error log.
+            # -q keeps nginx -t from writing "test successful" to the shared error log every interval.
+            test: ["CMD-SHELL", "nginx -t -q && nc -z 10.10.1.2 443"]
             interval: 10s
             timeout: 5s
-            retries: 3
+            retries: 5
+            start_period: 15s
     php:
         image: mercurykd/vpnbot-php:1.7
         build:
@@ -121,18 +128,17 @@ services:
             - ./config/.profile:/root/.ashrc:ro
             - ./config/php.ini:/etc/php81/php.ini
             - ./config/:/config/
+            - ./config-templates:/config-templates:ro
             - ./certs/:/certs/
             - ./ssh:/ssh
             - ./app:/app
             - ./logs/:/logs/
+            - .:/repo:rw
             - ./scripts/start_php.sh:/start_php.sh
             - ./scripts/check_file.sh:/check_file.sh
             - ./version:/version
-            - ./mirror:/mirror
-            - ./.env:/mirror/.env
             - ./update:/update
             - ./.git:/.git
-            - ./singbox_windows:/singbox
             - ./docker-compose.override.yml:/docker/compose
             - /var/run/docker.sock:/var/run/docker.sock:ro
         environment:
@@ -144,8 +150,8 @@ services:
             - path: ./override.env
               required: false
         hostname: php
-        container_name: php-${VER}
-        # restart: unless-stopped
+        container_name: php
+        restart: unless-stopped
         stop_grace_period: 1s
         command: ["/bin/sh", "/start_php.sh"]
         working_dir: /app
@@ -170,6 +176,7 @@ services:
             - ./config/.profile:/root/.ashrc:ro
             - ./config/php.ini:/etc/php81/php.ini
             - ./config/:/config/
+            - ./config-templates:/config-templates:ro
             - ./certs/:/certs/
             - ./ssh:/ssh
             - ./app:/app
@@ -178,6 +185,7 @@ services:
             - ./update:/update
             - ./.git:/.git
             - ./scripts/start_service.sh:/start_service.sh
+            - ./scripts/menu_status.sh:/scripts/menu_status.sh:ro
             - ./docker-compose.override.yml:/docker/compose
             - /var/run/docker.sock:/var/run/docker.sock:ro
         environment:
@@ -189,8 +197,8 @@ services:
             - path: ./override.env
               required: false
         hostname: service
-        container_name: service-${VER}
-        # restart: unless-stopped
+        container_name: svc
+        restart: unless-stopped
         stop_grace_period: 1s
         command: ["/bin/sh", "/start_service.sh"]
         working_dir: /app
@@ -202,57 +210,13 @@ services:
             - up
             - ng
             - php
-            - wg
             - wg1
             - ad
             - tg
             - xr
-            - oc
-            - np
-            - proxy
-            - ss
-            - dnstt
             - hy
-    wg:
-        image: mercurykd/vpnbot-wg:1.2
-        build:
-            dockerfile: dockerfile/wireguard.dockerfile
-            args:
-                image: ${IMAGE}
-        volumes:
-            - ./config/.profile:/root/.ashrc:ro
-            - ./config/wg0.conf:/etc/wireguard/wg0.conf
-            - ./config/pac.json:/pac.json
-            - ./scripts/start_wg.sh:/start_wg.sh
-            - ./scripts/reset_wg.sh:/reset_wg.sh
-            - ./scripts/block_torrent.sh:/block_torrent.sh
-            - ./scripts/block_exchange.sh:/block_exchange.sh
-            - ./ssh:/ssh
-            - ./config/sshd_config:/etc/ssh/sshd_config
-        hostname: wireguard
-        container_name: wireguard-${VER}
-        depends_on:
-            php:
-                condition: service_healthy
-        env_file:
-            - path: ./.env
-              required: true # default
-            - path: ./override.env
-              required: false
-        environment:
-            ADDRESS: ${WGADDRESS}
-        cap_add:
-            - NET_ADMIN
-        devices:
-            - /dev/net/tun:/dev/net/tun
-        stop_grace_period: 1s
-        command: ["/bin/sh", "/start_wg.sh"]
-        networks:
-            default:
-                ipv4_address: 10.10.0.4
-        logging: *default-logging
     wg1:
-        image: mercurykd/vpnbot-wg:1.2
+        image: mercurykd/vpnbot-wg:1.4
         build:
             dockerfile: dockerfile/wireguard.dockerfile
             args:
@@ -262,13 +226,18 @@ services:
             - ./config/wg1.conf:/etc/wireguard/wg0.conf
             - ./config/pac.json:/pac.json
             - ./scripts/start_wg.sh:/start_wg.sh
+            - ./scripts/awg_up.sh:/awg_up.sh
             - ./scripts/reset_wg.sh:/reset_wg.sh
             - ./scripts/block_torrent.sh:/block_torrent.sh
             - ./scripts/block_exchange.sh:/block_exchange.sh
+            - ./bin/amneziawg-go:/usr/bin/amneziawg-go:ro
             - ./ssh:/ssh
             - ./config/sshd_config:/etc/ssh/sshd_config
         hostname: wireguard1
-        container_name: wireguard1-${VER}
+        container_name: wg1
+        restart: unless-stopped
+        ports:
+            - 51821:51821/udp
         depends_on:
             php:
                 condition: service_healthy
@@ -307,7 +276,8 @@ services:
             - ./logs/:/logs/
             - ./scripts/start_ad.sh:/start_ad.sh
         hostname: adguard
-        container_name: adguard-${VER}
+        container_name: ad
+        restart: unless-stopped
         depends_on:
             php:
                 condition: service_healthy
@@ -336,7 +306,8 @@ services:
             - ./config/mtprotosecret:/mtprotosecret
             - ./logs/:/logs/
         hostname: telegram
-        container_name: mtproto-${VER}
+        container_name: tg
+        restart: unless-stopped
         depends_on:
             php:
                 condition: service_healthy
@@ -366,8 +337,10 @@ services:
             - ./config/xray.json:/xray.json
             - ./scripts/start_xray.sh:/start_xray.sh
             - ./logs:/logs
+            - ./bin/xray:/usr/bin/xray:ro
         hostname: xray
-        container_name: xray-${VER}
+        container_name: xr
+        restart: unless-stopped
         depends_on:
             php:
                 condition: service_healthy
@@ -384,90 +357,30 @@ services:
             xray:
                 ipv4_address: 10.10.1.9
         logging: *default-logging
-    oc:
-        image: mercurykd/vpnbot-oc:1.2
-        build:
-            dockerfile: dockerfile/ocserv.dockerfile
-            args:
-                image: ${IMAGE}
-        volumes:
-            - ./config/.profile:/root/.ashrc:ro
-            - ./ssh:/ssh
-            - ./config/sshd_config:/etc/ssh/sshd_config
-            - ./config:/etc/ocserv
-            - ./certs:/certs
-            - ./scripts/start_oc.sh:/start_oc.sh
-        hostname: ocserv
-        container_name: openconnect-${VER}
-        depends_on:
-            php:
-                condition: service_healthy
-        env_file:
-            - path: ./.env
-              required: true # default
-            - path: ./override.env
-              required: false
-        stop_grace_period: 1s
-        command: ["/bin/sh", "/start_oc.sh"]
-        cap_add:
-            - NET_ADMIN
-        devices:
-            - /dev/net/tun:/dev/net/tun
-        networks:
-            default:
-                ipv4_address: 10.10.0.11
-        logging: *default-logging
-    np:
-        image: mercurykd/vpnbot-np:1.2
-        build:
-            dockerfile: dockerfile/naive.dockerfile
-            args:
-                image: ${IMAGE}
-        volumes:
-            - ./config/.profile:/root/.ashrc:ro
-            - ./ssh:/ssh
-            - ./config/sshd_config:/etc/ssh/sshd_config
-            - ./config:/config
-            - ./certs:/certs
-            - ./scripts/start_np.sh:/start_np.sh
-        hostname: naive
-        container_name: naive-${VER}
-        depends_on:
-            php:
-                condition: service_healthy
-        env_file:
-            - path: ./.env
-              required: true # default
-            - path: ./override.env
-              required: false
-        stop_grace_period: 1s
-        command: ["/bin/sh", "/start_np.sh"]
-        cap_add:
-            - NET_ADMIN
-        networks:
-            default:
-                ipv4_address: 10.10.0.12
-        logging: *default-logging
     wp:
-        image: mercurykd/vpnbot-wp:1.5
+        # Lightweight WARP via wgcf + WireGuard + microsocks (same image as wg1).
+        # SOCKS stays on :4000 — existing xray outbound is unchanged.
+        image: mercurykd/vpnbot-wg:1.4
         build:
-            dockerfile: dockerfile/warp.dockerfile
+            dockerfile: dockerfile/wireguard.dockerfile
             args:
                 image: ${IMAGE}
         cap_add:
             - NET_ADMIN
+        sysctls:
+            - net.ipv4.conf.all.src_valid_mark=1
         devices:
             - /dev/net/tun:/dev/net/tun
         volumes:
-            - ./config/.profile:/root/.bashrc:ro
+            - ./config/.profile:/root/.ashrc:ro
             - ./ssh:/ssh
             - ./config/sshd_config:/etc/ssh/sshd_config
             - ./config:/config
-            - ./certs:/certs
             - ./scripts/start_wp.sh:/start_wp.sh
-            - warp:/var/lib/cloudflare-warp
+            - warp:/etc/warp
         hostname: warp
-        container_name: warp-${VER}
+        container_name: wp
+        restart: unless-stopped
         depends_on:
             php:
                 condition: service_healthy
@@ -477,97 +390,11 @@ services:
             - path: ./override.env
               required: false
         stop_grace_period: 1s
+        working_dir: /etc/warp
         command: ["/bin/sh", "/start_wp.sh"]
         networks:
             default:
                 ipv4_address: 10.10.0.13
-        logging: *default-logging
-    proxy:
-        image: mercurykd/vpnbot-ss:1.2
-        build:
-            dockerfile: dockerfile/shadowsocks.dockerfile
-            args:
-                image: ${IMAGE}
-        volumes:
-            - ./config/.profile:/root/.ashrc:ro
-            - ./config/sslocal.json:/config.json
-            - ./ssh:/ssh
-            - ./config/sshd_config:/etc/ssh/sshd_config
-            - ./scripts/start_proxy.sh:/start_proxy.sh
-        hostname: proxy
-        container_name: proxy-${VER}
-        depends_on:
-            php:
-                condition: service_healthy
-        networks:
-            default:
-                ipv4_address: 10.10.0.3
-        environment:
-            TZ: ${TZ}
-        env_file:
-            - path: ./.env
-              required: true # default
-            - path: ./override.env
-              required: false
-        stop_grace_period: 1s
-        command: ["/bin/sh", "/start_proxy.sh"]
-        logging: *default-logging
-    ss:
-        image: mercurykd/vpnbot-ss:1.2
-        build:
-            dockerfile: dockerfile/shadowsocks.dockerfile
-            args:
-                image: ${IMAGE}
-        volumes:
-            - ./config/.profile:/root/.ashrc:ro
-            - ./config/ssserver.json:/config.json
-            - ./ssh:/ssh
-            - ./config/sshd_config:/etc/ssh/sshd_config
-            - ./scripts/start_ss.sh:/start_ss.sh
-        hostname: shadowsocks
-        container_name: shadowsocks-${VER}
-        depends_on:
-            php:
-                condition: service_healthy
-        env_file:
-            - path: ./.env
-              required: true # default
-            - path: ./override.env
-              required: false
-        stop_grace_period: 1s
-        command: ["/bin/sh", "/start_ss.sh"]
-        networks:
-            default:
-                ipv4_address: 10.10.0.6
-        logging: *default-logging
-    dnstt:
-        image: mercurykd/vpnbot-dnstt:1.0
-        build:
-            dockerfile: dockerfile/dnstt.dockerfile
-            args:
-                image: ${IMAGE}
-        volumes:
-            - ./config/.profile:/root/.ashrc:ro
-            - ./ssh:/ssh
-            - ./logs:/logs
-            - ./config/sshd_config:/etc/ssh/sshd_config
-            - ./config/dnstt:/dnstt
-            - ./scripts/start_dnstt.sh:/start_dnstt.sh
-        hostname: dnstt
-        container_name: dnstt-${VER}
-        depends_on:
-            php:
-                condition: service_healthy
-        env_file:
-            - path: ./.env
-              required: true # default
-            - path: ./override.env
-              required: false
-        stop_grace_period: 1s
-        command: ["/bin/sh", "/start_dnstt.sh"]
-        networks:
-            default:
-                ipv4_address: 10.10.0.16
         logging: *default-logging
     hy:
         image: mercurykd/vpnbot-hysteria:1.0
@@ -584,7 +411,7 @@ services:
             - ./config:/config
             - ./scripts/start_hysteria.sh:/start_hysteria.sh
         hostname: hysteria
-        container_name: hysteria-${VER}
+        container_name: hy
         depends_on:
             php:
                 condition: service_healthy
@@ -594,8 +421,45 @@ services:
             - path: ./override.env
               required: false
         stop_grace_period: 1s
+        restart: unless-stopped
         command: ["/bin/sh", "/start_hysteria.sh"]
         networks:
             default:
                 ipv4_address: 10.10.0.17
+        logging: *default-logging
+
+    polling:
+        # Long-polling (getUpdates) fallback. Opt-in via `--profile polling`.
+        # Start it only together with `polling_mode: 1` in pac.json so init.php
+        # runs deleteWebhook() and webhook/polling never fight over updates.
+        image: mercurykd/vpnbot-php:1.7
+        profiles: ["polling"]
+        volumes:
+            - ./config/.profile:/root/.ashrc:ro
+            - ./config/php.ini:/etc/php81/php.ini
+            - ./config/:/config/
+            - ./certs/:/certs/
+            - ./app:/app
+            - ./logs/:/logs/
+            - ./version:/version
+            - ./update:/update
+        environment:
+            IP: ${IP}
+            VER: ${VER}
+        env_file:
+            - path: ./.env
+              required: true
+            - path: ./override.env
+              required: false
+        hostname: polling
+        container_name: polling
+        restart: unless-stopped
+        command: ["php", "/app/polling.php"]
+        working_dir: /app
+        depends_on:
+            php:
+                condition: service_healthy
+        networks:
+            default:
+                ipv4_address: 10.10.0.16
         logging: *default-logging
