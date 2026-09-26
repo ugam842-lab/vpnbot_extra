@@ -116,6 +116,32 @@ crontab -e
 - **Стабильность нод** (fix 2026-09-26): входящий node-sync больше не сбрасывает локальную `node_role` в `child` — роль сохраняется как локальный ключ, родитель не «скатывается» и вебхук не отдаёт 403.
 - **User-portal `/update`** роутится через портал (не падает в «auth denied»), не-админ без привязанной сессии не блокируется.
 - **User-portal not-modified guard:** повторный `/update` не задваивает меню (честные ошибки редактирования по-прежнему фолбэчатся в `send`).
+- **Ноды не исчезают при удалении:** кнопка «удалить» заменена на «отвязать» (detach) — нода снимается с регистрации и выключается, но остаётся в списке со своим токеном; необратимый снос вынесен в `nodePurge` с подтверждением.
+- **Независимая резервная нода (вариант A):** роль `standalone` — нода обслуживает собственный вебхук и клиентов, не зависит от parent и наоборот; отказ любой стороны не каскадит. Миграция — `scratch/migrate_standalone.php`.
+- **Донат-страница (`app/webapp/donate.html`, `toncoin.png`) удалена из форка** — форк полностью собственный, без доната.
+
+### IKEv2 (strongSwan) — инструкция
+
+IKEv2 — второй тип подключения к серверу, отдельно от VLESS/AWG. Работает через strongSwan **нативно на хосте** (не в docker), авторизация по логину/паролю (EAP-MSCHAPv2), без ключей. Профиль клиента выдаётся из бота при включённом транспорте `ikev2`.
+
+**Для админа — развернуть strongSwan на хосте.** Один раз, от root:
+
+```bash
+sudo IKEV2_SERVER_IP=<твой-IP> bash scripts/setup-ikev2.sh
+```
+
+Скрипт идемпотентен: ставит strongSwan (apt/dnf), генерирует CA + серверный сертификат (если их нет), пишет статичный `/etc/swanctl/conf.d/ikev2.conf` (соединение + пул `10.99.0.0/24`), кладёт копию CA в `config/ikev2-ca.pem` (php-контейнер видит её как `/config/ikev2-ca.pem`) и запускает `strongswan-swanctl.service`. Приватный ключ CA и EAP-пароли **не** попадают в git — они хранятся на хосте.
+
+**Дальше мастер — включить транспорт.** В меню транспорта нажми тумблер **IKEv2** (глобально для всех, либо per-user в карточке пользователя). Бот начнёт генерировать EAP-пароль пользователя в `config/ikev2-eap.conf` и перезагружать strongSwan по SSH. Для этого php-контейнер должен уметь ходить на хост по SSH: добавь публичный ключ контейнера (`/ssh/key.pub`) в `authorized_keys` root'а на хосте. Пока флаг выключен — кнопки профиля не показываются.
+
+**Для пользователя — как подключиться.** В боте появится кнопка «Профиль IKEv2», где выдаются логин, пароль, сервер и два файла профиля. По всем ОС:
+
+- **Android** — приложение **strongSwan** (Play Store). Скачай `.sswan`, «Import VPN profile → выбранный файл», введи логин/пароль, подключись.
+- **iOS / macOS** — нативный IKEv2. Открой `.mobileconfig`, подтверди установку профиля в «Настройки → Profile Downloaded», введи пароль. Альтернатива — приложение strongSwan из App Store.
+- **Windows** — нативный клиент: «Параметры → Сеть → VPN → Добавить VPN-подключение», тип IKEv2, введи сервер/логин/пароль (EAP). Качать сертификат CA не нужно при EAP.
+- **Linux** — нативный **strongSwan** (swanctl или ipsec) с конфигом EAP-MSCHAPv2, либо NetworkManager (`nmcli` с плагином `network-manager-strongswan`).
+
+IKEv2 удобен как запасной канал: не зависит от VLESS/AWG, стабилен на мобильных сетях и нативно поддерживается iOS/macOS/Windows без стороннего софта.
 
 ### Roadmap (v3.x)
 
@@ -246,6 +272,29 @@ Add:
 - **Node stability** (fix 2026-09-26): incoming node-sync no longer forces the local `node_role` to `child` — the role is kept as a local key, so the parent can't relapse and the webhook can't return 403.
 - **User-portal `/update`** routes through the portal (no more "auth denied"); a non-admin without a bound session is no longer blocked.
 - **User-portal not-modified guard:** a repeated `/update` no longer duplicates the menu (genuine edit errors still fall back to `send`).
+
+### IKEv2 (strongSwan) — setup
+
+IKEv2 is a second connection method to the server, separate from VLESS/AWG. It runs through strongSwan **natively on the host** (not in Docker), authenticates by login/password (EAP-MSCHAPv2), keyless. The client profile is issued from the bot when the `ikev2` transport is enabled.
+
+**Admin — deploy strongSwan on the host.** Once, as root:
+
+```bash
+sudo IKEV2_SERVER_IP=<your-IP> bash scripts/setup-ikev2.sh
+```
+
+The script is idempotent: installs strongSwan (apt/dnf), generates a CA + server cert (if missing), writes a static `/etc/swanctl/conf.d/ikev2.conf` (connection + `10.99.0.0/24` pool), copies the CA to `config/ikev2-ca.pem` (the php container sees it as `/config/ikev2-ca.pem`) and starts `strongswan-swanctl.service`. The CA private key and EAP passwords are **not** committed — they live on the host.
+
+**Admin — enable the transport.** In the transport menu, tap the **IKEv2** toggle (global for everyone, or per-user in the user's card). The bot then generates the user's EAP password into `config/ikev2-eap.conf` and reloads strongSwan over SSH. For this the php container must reach the host over SSH: add the container's public key (`/ssh/key.pub`) to root's `authorized_keys` on the host. While the flag is off, the profile buttons are hidden.
+
+**User — how to connect.** A "IKEv2 profile" button appears in the bot, giving the login, password, server and two profile files. Across OSes:
+
+- **Android** — the **strongSwan** app (Play Store). Download the `.sswan`, "Import VPN profile → select the file", enter login/password, connect.
+- **iOS / macOS** — native IKEv2. Open the `.mobileconfig`, confirm install under "Settings → Profile Downloaded", enter the password. Alternative: the strongSwan app from the App Store.
+- **Windows** — native client: "Settings → Network → VPN → Add a VPN connection", type IKEv2, enter server/login/password (EAP). No CA cert download needed with EAP.
+- **Linux** — native **strongSwan** (swanctl or ipsec) with an EAP-MSCHAPv2 config, or NetworkManager (`nmcli` with the `network-manager-strongswan` plugin).
+
+IKEv2 is a useful fallback channel: independent of VLESS/AWG, stable on mobile networks, and natively supported by iOS/macOS/Windows without third-party software.
 
 ### Roadmap (v3.x)
 
