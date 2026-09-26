@@ -155,6 +155,37 @@ trait TransportRegistryTrait
         return '/hy' . ($hash !== '' ? $hash : $this->getHashBot());
     }
 
+    /**
+     * Собрать hysteria.yaml без side-effects. Чистая функция: на вход — pac,
+     * hash, domain, признак https; на выход — массив для yaml_emit_file.
+     *
+     * proxy_protocol сюда НЕ пишется: hysteria стоит за docker-proxy (композ
+     * маппит 443/udp на хосте), который не вставляет PROXY-заголовок. С
+     * proxy_protocol:true hysteria за docker-proxy видит мусорный первый байт и
+     * рвёт QUIC-рукопожатие (клиенты HAPP/V2Ray не подключаются).
+     */
+    protected function buildHysteriaServerConfig(array $pac, string $hash = '', string $domain = '', bool $https = true): array
+    {
+        return [
+            'listen'     => ':443',
+            'tls'        => [
+                'cert' => '/certs/cert_public',
+                'key'  => '/certs/cert_private',
+            ],
+            'auth'       => [
+                'type'     => 'password',
+                'password' => (string) ($pac['hysteria_pass'] ?? ''),
+            ],
+            'masquerade' => [
+                'type'  => 'proxy',
+                'proxy' => [
+                    'url'         => ($https ? 'https' : 'http') . '://' . $domain . $this->getHyTransportPath($hash) . '/',
+                    'rewriteHost' => true,
+                ],
+            ],
+        ];
+    }
+
     protected function getXhttpInboundPort(?array $pac = null): int
     {
         $ports = $this->getTransportRegistryPorts($pac);
