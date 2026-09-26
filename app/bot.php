@@ -13,6 +13,7 @@ require_once __DIR__ . '/traits/Ikev2Trait.php';
 require_once __DIR__ . '/traits/MirrorTrait.php';
 require_once __DIR__ . '/traits/NodeTrait.php';
 require_once __DIR__ . '/traits/LoggingTrait.php';
+require_once __DIR__ . '/BackupSchedule.php';
 
 class Bot
 {
@@ -1830,26 +1831,20 @@ class Bot
             $start  = strtotime(trim($start));
             $period = strtotime(trim($period), 0);
 
-            if (
-                !empty($start)
-                && !empty($period)
-                && $now >= $start
-            ) {
-                // ?????????, ??????? ?????? ???????? ?????? ? ??????? start
-                $elapsed = $now - $start;
-                $periodsElapsed = floor($elapsed / $period);
+            $lastBackupTime = (int) ($c['last_backup_time'] ?? 0);
+            $due = BackupSchedule::dueAt($start, $period, $now, $lastBackupTime);
 
-                // ????? ?????????? ????????? ??????
-                $lastScheduledBackup = $start + ($periodsElapsed * $period);
-
-                // ?????????, ?????? ?? ??? ????? ? ???? ???????
-                $lastBackupTime = $c['last_backup_time'] ?? 0;
-
-                // ???? ????????? ????? ??? ?????? ?? ?????? ???????? ??????? - ?????? ?????
-                if ($lastBackupTime < $lastScheduledBackup) {
-                    $c['last_backup_time'] = $now;
-                    $this->setPacConf($c);
+            if ($due !== null) {
+                // Записываем точку расписания (не "сейчас"): следующий тик
+                // увидит lastBackupTime == той же точке и не повторит бэкап
+                // при наложении процессов во время перезапуска.
+                $c['last_backup_time'] = $due;
+                $this->setPacConf($c);
+                try {
                     $this->pinBackup();
+                } catch (Exception $e) {
+                    // Бэкап уже отправлен или нет — не роняем цикл cron.
+                    file_put_contents('/logs/php_error', 'checkBackup: ' . $e->getMessage());
                 }
             }
         }
