@@ -16,6 +16,7 @@ Telegram-бот для управления VPN-сервером из Telegram.
 
 - VLESS transport registry (`Reality` / `Websocket` / `XHTTP` flags) + Mihomo/Clash подписки
 - WireGuard / AmneziaWG (только WG1)
+- IKEv2 (strongSwan)
 - AdGuardHome
 - MTProto
 - Hysteria
@@ -109,6 +110,7 @@ crontab -e
 - **Фикс выделения IP** для WG/Amnezia (пул заканчивался при 128 клиентах).
 - **Фикс удаления устройства** в портале.
 - **AmneziaWG 3.0** на сервере.
+- **IKEv2 (strongSwan):** профиль клиента по `ikev2` transport-флагу (глобальный + per-subscription override), кнопка «client ikev2 profile» в выдаче, хост из `pac['ikev2_host']` → `pac['domain']` → IP инстанса.
 - **Стабильность нод** (fix 2026-09-26): входящий node-sync больше не сбрасывает локальную `node_role` в `child` — роль сохраняется как локальный ключ, родитель не «скатывается» и вебхук не отдаёт 403.
 - **User-portal `/update`** роутится через портал (не падает в «auth denied»), не-админ без привязанной сессии не блокируется.
 - **User-portal not-modified guard:** повторный `/update` не задваивает меню (честные ошибки редактирования по-прежнему фолбэчатся в `send`).
@@ -151,6 +153,7 @@ Telegram bot for managing a VPN server directly from Telegram.
 
 - VLESS transport registry (`Reality` / `Websocket` / `XHTTP` flags) + Mihomo/Clash subscriptions
 - WireGuard / AmneziaWG (WG1 only)
+- IKEv2 (strongSwan)
 - AdGuardHome
 - MTProto
 - Hysteria
@@ -235,6 +238,7 @@ Add:
 - **IP allocation fix** for WG/Amnezia (the pool ran out at 128 clients).
 - **Device deletion fix** in the portal.
 - **AmneziaWG 3.0** on the server.
+- **IKEv2 (strongSwan):** client profile via the `ikev2` transport flag (global + per-subscription override), a "client ikev2 profile" button in the output; host resolved from `pac['ikev2_host']` → `pac['domain']` → instance IP.
 - **Node stability** (fix 2026-09-26): incoming node-sync no longer forces the local `node_role` to `child` — the role is kept as a local key, so the parent can't relapse and the webhook can't return 403.
 - **User-portal `/update`** routes through the portal (no more "auth denied"); a non-admin without a bound session is no longer blocked.
 - **User-portal not-modified guard:** a repeated `/update` no longer duplicates the menu (genuine edit errors still fall back to `send`).
