@@ -1,8 +1,8 @@
-# VPNBot Extra v3-trimx
-
-Форк от [TrimXx/vpnbot_extra](https://github.com/TrimXx/vpnbot_extra), доработан **ugam совместно с AI**.
+# VPNBot Extra — форк ugam842
 
 Telegram-бот для управления VPN-сервером: VLESS + Mihomo/Clash подписки, AWG (WG1), AdGuard, MTProto, Hysteria.
+
+Цепочка форков: [mercurykd/vpnbot](https://github.com/mercurykd/vpnbot) → [TrimXx/vpnbot_extra](https://github.com/TrimXx/vpnbot_extra) → этот форк. Доработан **ugam842 совместно с AI**.
 
 ## Русский
 
@@ -27,10 +27,10 @@ Telegram-бот для управления VPN-сервером из Telegram.
 - Ubuntu `22.04/24.04`
 - Debian `11/12`
 
-### Установка (ветка v2)
+### Установка
 
 ```shell
-wget -O- https://raw.githubusercontent.com/TrimXx/vpnbot_extra/v2/scripts/init.sh | sh -s YOUR_TELEGRAM_BOT_KEY v2
+wget -O- https://raw.githubusercontent.com/ugam842-lab/vpnbot_extra/master/scripts/init.sh | sh -s YOUR_TELEGRAM_BOT_KEY master
 ```
 
 При первом запуске создаются `.env` (из `env.defaults`), `config/` (из `config-templates/`) и `override.env`.
@@ -38,7 +38,7 @@ wget -O- https://raw.githubusercontent.com/TrimXx/vpnbot_extra/v2/scripts/init.s
 ### Обновление (без токена бота)
 
 ```shell
-wget -O- https://raw.githubusercontent.com/TrimXx/vpnbot_extra/v2/scripts/init.sh | sh -s -- v2
+wget -O- https://raw.githubusercontent.com/ugam842-lab/vpnbot_extra/master/scripts/init.sh | sh -s -- master
 ```
 
 ### Важное по обновлениям
@@ -47,7 +47,7 @@ wget -O- https://raw.githubusercontent.com/TrimXx/vpnbot_extra/v2/scripts/init.s
 - Для полного обновления репозитория используйте:
 
 ```shell
-UPGRADE_SCOPE=all wget -O- https://raw.githubusercontent.com/TrimXx/vpnbot_extra/v2/scripts/init.sh | sh -s -- v2
+UPGRADE_SCOPE=all wget -O- https://raw.githubusercontent.com/ugam842-lab/vpnbot_extra/master/scripts/init.sh | sh -s -- master
 ```
 
 - `make u` и `update/update.sh` обновлены для безопасного сценария: подтягиваются целевые кодовые пути (`app`, `update`, `makefile`, `version`) без wipe конфигов.
@@ -78,7 +78,7 @@ crontab -e
 @reboot cd /root/vpnbot_extra && make r
 ```
 
-### Основные доработки в форке
+### Основные доработки в форке (TrimXx → базовый слой)
 
 - HWID runtime mode: глобальный флаг + override на подписку.
 - Ленивая миграция на модель `1 устройство = 1 device UUID`.
@@ -90,26 +90,28 @@ crontab -e
 - Многодоменная схема (`domain_main + aliases`) и SAN-сертификаты.
 - Runtime AWG-профили по `device_uuid` (включая выдачу в Mihomo/Clash при наличии `device_uuid`).
 - Runtime AWG операции закреплены за WG1-контекстом.
-- Поддержка DNS-алиасов:
-  - вывод DoH/DoT по `main + aliases` в меню AdGuard;
-  - добавление DoH URL по алиасам в `dns.nameserver` для Clash-подписки.
-- Кнопка `change reality server ip/domain` теперь меняет только клиентский Reality `server` (bridge), не трогая `xray reality dest`.
-- Обновлен импорт бэкапа: `pac` восстанавливается merge-способом для совместимости старых/новых бэкапов и новых полей.
+- Поддержка DNS-алиасов (DoH/DoT по `main + aliases` в меню AdGuard и в Clash `dns.nameserver`).
+- Кнопка `change reality server ip/domain` меняет только клиентский Reality `server` (bridge), не трогая `xray reality dest`.
+- Обновлен импорт бэкапа: `pac` восстанавливается merge-способом для совместимости старых/новых бэкапов.
 
 ### Доработки ugam842 (поверх v3-trimx)
 
-- Мультисервер: parent + child-ноды; VLESS-ссылки на child-ноду в подписке (retarget `sni`/`host` для TLS-транспортов), резервные URL подписки.
-- VLESS Reality → XHTTP+Reality для обхода ТСПУ.
-- Поддержка (support): модель «профиль → треды» — несколько тредов на профиль, открытие/закрытие тредов с обеих сторон, ответ в тред из user-portal и из `/support`.
-- Unbound-user stub: непривязанный пользователь, написавший текст, получает заглушку «нет доступа» вместо тихого сброса.
-- Поле контакта в заявке на доступ.
-- Ник + имя + Telegram ID в поиске клиентов (`searchClient`).
-- Уведомления админу об изменении подписки + команда `/update` для подписки на обновления.
-- Long-polling fallback (`polling.php`) — режим работы без вебхука.
-- Стабильность нод (fix 2026-09-26): входящий node-sync больше не сбрасывает локальную роль ноды в `child` — `node_role` сохраняется как локальный ключ, parent не «скатывается» в child и вебхук не отдаёт 403.
-- User-portal: команда `/update` роутится через портал (не падает в «auth denied»), не-админ без привязанной сессии не блокируется.
-- User-portal: guard на «message is not modified» — повторный `/update` не задваивает меню (честные ошибки редактирования по-прежнему фолбэчатся в `send`).
-- Устройства в портале (`HwidTrait`) — корректный список по device UUID.
+- **Мультисервер:** parent + child-ноды; VLESS-ссылки на child-ноду в подписке (retarget `sni`/`host` для TLS-транспортов), резервные URL подписки.
+- **VLESS Reality → XHTTP+Reality** для обхода ТСПУ; при выключенном Reality — XHTTP без TLS, чтобы устройство добавлялось корректно.
+- **Поддержка (support):** модель «профиль → треды» — несколько тредов на профиль, открытие/закрытие тредов с обеих сторон, ответ в тред из user-portal и из `/support`; в тикете админ видит ник + имя + Telegram ID; поле контакта (TG/email/WhatsApp) в заявке.
+- **Unbound-user stub:** непривязанный пользователь, написавший текст, получает заглушку «нет доступа» вместо тихого сброса.
+- **Уведомления об изменении подписки** админу + команда `/update` для подписки на обновления.
+- **Long-polling fallback** (`polling.php`) — режим работы без вебхука.
+- **Трафик up/down раздельно** в web-подписке.
+- **Иерархия админов:** только owner добавляет/удаляет админов.
+- **Broadcast** всем пользователям бота.
+- **Поиск конфига по имени** для админа (с привязкой к Telegram ID).
+- **Фикс выделения IP** для WG/Amnezia (пул заканчивался при 128 клиентах).
+- **Фикс удаления устройства** в портале.
+- **AmneziaWG 3.0** на сервере.
+- **Стабильность нод** (fix 2026-09-26): входящий node-sync больше не сбрасывает локальную `node_role` в `child` — роль сохраняется как локальный ключ, родитель не «скатывается» и вебхук не отдаёт 403.
+- **User-portal `/update`** роутится через портал (не падает в «auth denied»), не-админ без привязанной сессии не блокируется.
+- **User-portal not-modified guard:** повторный `/update` не задваивает меню (честные ошибки редактирования по-прежнему фолбэчатся в `send`).
 
 ### Roadmap (v3.x)
 
@@ -137,7 +139,7 @@ crontab -e
 
 ### Авторы
 
-Оригинал — [TrimXx](https://github.com/TrimXx/vpnbot_extra). Доработки этого форка — **ugam совместно с AI**.
+Цепочка форков: [mercurykd/vpnbot](https://github.com/mercurykd/vpnbot) → [TrimXx/vpnbot_extra](https://github.com/TrimXx/vpnbot_extra) → этот форк. Доработки этого форка — **ugam842 совместно с AI**.
 
 ---
 
@@ -163,13 +165,13 @@ Telegram bot for managing a VPN server directly from Telegram.
 ### Install
 
 ```shell
-wget -O- https://raw.githubusercontent.com/TrimXx/vpnbot_extra/master/scripts/init.sh | sh -s YOUR_TELEGRAM_BOT_KEY master
+wget -O- https://raw.githubusercontent.com/ugam842-lab/vpnbot_extra/master/scripts/init.sh | sh -s YOUR_TELEGRAM_BOT_KEY master
 ```
 
 ### Upgrade (without bot token)
 
 ```shell
-wget -O- https://raw.githubusercontent.com/TrimXx/vpnbot_extra/master/scripts/init.sh | sh -s -- master
+wget -O- https://raw.githubusercontent.com/ugam842-lab/vpnbot_extra/master/scripts/init.sh | sh -s -- master
 ```
 
 ### Upgrade behavior
@@ -178,7 +180,7 @@ wget -O- https://raw.githubusercontent.com/TrimXx/vpnbot_extra/master/scripts/in
 - Full-repo upgrade is still available:
 
 ```shell
-UPGRADE_SCOPE=all wget -O- https://raw.githubusercontent.com/TrimXx/vpnbot_extra/v2/scripts/init.sh | sh -s -- v2
+UPGRADE_SCOPE=all wget -O- https://raw.githubusercontent.com/ugam842-lab/vpnbot_extra/master/scripts/init.sh | sh -s -- master
 ```
 
 - `make u` and `update/update.sh` are adjusted for safer upgrades: target code paths (`app`, `update`, `makefile`, `version`) are refreshed without wiping user configs.
@@ -201,7 +203,7 @@ Add:
 @reboot cd /root/vpnbot_extra && make r
 ```
 
-### Key fork improvements
+### Key fork improvements (TrimXx base layer)
 
 - HWID runtime mode with global and per-subscription override.
 - Lazy migration to `1 device = 1 device UUID`.
@@ -213,27 +215,29 @@ Add:
 - Multi-domain support (`domain_main + aliases`) with SAN certificates.
 - Runtime AWG profiles bound to `device_uuid` (including Mihomo/Clash output when `device_uuid` is present).
 - Runtime AWG operations pinned to WG1 context.
-- DNS aliases support:
-  - DoH/DoT output for `main + aliases` in AdGuard menu;
-  - alias DoH URLs appended to Clash `dns.nameserver`.
-- `change reality server ip/domain` now changes only client-facing Reality `server` (bridge), without changing `xray reality dest`.
+- DNS aliases support (DoH/DoT output for `main + aliases` in AdGuard menu and Clash `dns.nameserver`).
+- `change reality server ip/domain` changes only client-facing Reality `server` (bridge), without changing `xray reality dest`.
 - Backup import improved: `pac` is restored via merge strategy for old/new backup compatibility.
 - `/mirror` script updated (socat TCP/UDP, systemd units, install/status/restart/logs/uninstall).
 
 ### ugam842 fork improvements (on top of v3-trimx)
 
-- Multi-server: parent + child nodes; child-node VLESS links in the subscription (`sni`/`host` retarget for TLS transports), backup subscription URLs.
-- VLESS Reality → XHTTP+Reality to bypass TSPU.
-- Support: profile→threads model — multiple threads per profile, open/close threads from both sides, reply-in-thread from user-portal and `/support`.
-- Unbound-user stub: a non-bound user typing text gets a "no access" stub instead of being silently dropped.
-- Contact field on the access request.
-- Nick + name + Telegram ID in client search (`searchClient`).
-- Admin notifications on subscription change + `/update` command to subscribe.
-- Long-polling fallback (`polling.php`) — running without a webhook.
-- Node stability (fix 2026-09-26): incoming node-sync no longer forces the local role to `child` — `node_role` is kept as a local key, so the parent can't relapse into `child` and the webhook can't return 403.
-- User-portal: `/update` routes through the portal (no more "auth denied"); a non-admin without a bound session is no longer blocked.
-- User-portal: "message is not modified" guard — a repeated `/update` no longer duplicates the menu (genuine edit errors still fall back to `send`).
-- Portal devices (`HwidTrait`) — correct per-device-UUID listing.
+- **Multi-server:** parent + child nodes; child-node VLESS links in the subscription (`sni`/`host` retarget for TLS transports), backup subscription URLs.
+- **VLESS Reality → XHTTP+Reality** to bypass TSPU; with Reality off — XHTTP without TLS, so the device is added correctly.
+- **Support:** profile→threads model — multiple threads per profile, open/close threads from both sides, reply-in-thread from user-portal and `/support`; admin sees nick + name + Telegram ID in a ticket; contact field (TG/email/WhatsApp) on the access request.
+- **Unbound-user stub:** a non-bound user typing text gets a "no access" stub instead of being silently dropped.
+- **Subscription-change notifications** to admin + `/update` command to subscribe.
+- **Long-polling fallback** (`polling.php`) — running without a webhook.
+- **Separate up/down traffic** in the web subscription.
+- **Admin hierarchy:** only the owner adds/removes admins.
+- **Broadcast** to all bot users.
+- **Client search by name** for admin (bound to Telegram ID).
+- **IP allocation fix** for WG/Amnezia (the pool ran out at 128 clients).
+- **Device deletion fix** in the portal.
+- **AmneziaWG 3.0** on the server.
+- **Node stability** (fix 2026-09-26): incoming node-sync no longer forces the local `node_role` to `child` — the role is kept as a local key, so the parent can't relapse and the webhook can't return 403.
+- **User-portal `/update`** routes through the portal (no more "auth denied"); a non-admin without a bound session is no longer blocked.
+- **User-portal not-modified guard:** a repeated `/update` no longer duplicates the menu (genuine edit errors still fall back to `send`).
 
 ### Roadmap (v3.x)
 

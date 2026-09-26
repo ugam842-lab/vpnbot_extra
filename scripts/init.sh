@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-REPO_URL="https://github.com/TrimXx/vpnbot_extra.git"
+REPO_URL="https://github.com/ugam842-lab/vpnbot_extra.git"
 LEGACY_DIR="/root/vpnbot"
 DEFAULT_DIR="/root/vpnbot_extra"
 UPGRADE_SCOPE="${UPGRADE_SCOPE:-app}"
