@@ -1,5 +1,4 @@
 listen: :443
-proxy_protocol: true
 
 tls:
     cert: /certs/cert_public

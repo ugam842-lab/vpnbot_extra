@@ -55,13 +55,17 @@ trait TransportRuntimeTrait
         $hash = $this->getHashBot();
         $name = (string) ($c['proxies'][$index]['name'] ?? 'proxy');
         if (!empty($flags['reality'])) {
+            // Reality runs over XHTTP on the server (network=xhttp in
+            // buildXrayInboundsByRegistry). The Clash/mihomo reality proxy must
+            // match that: network=xhttp + reality-opts + tls, and NO flow —
+            // xtls-rprx-vision is TCP-only and makes the server reject the
+            // handshake (XHTTP+Reality handshake carries no Vision flow).
             $c['proxies'][$index] = array_merge($c['proxies'][$index], [
                 'type' => 'vless',
                 'server' => $realityServerHost !== '' ? $realityServerHost : $domain,
                 'port' => $realityServerPort > 0 ? $realityServerPort : 443,
                 'uuid' => $uid,
-                'network' => 'tcp',
-                'flow' => 'xtls-rprx-vision',
+                'network' => 'xhttp',
                 'udp' => true,
                 'tls' => true,
                 'servername' => $realityServerName,
@@ -70,8 +74,12 @@ trait TransportRuntimeTrait
                     'public-key' => $publicKey,
                     'short-id' => $realityShortId,
                 ],
+                'xhttp-opts' => [
+                    'path' => $this->getXhttpTransportPath($hash),
+                    'mode' => $this->getXhttpTransportMode(),
+                ],
             ]);
-            unset($c['proxies'][$index]['ws-opts'], $c['proxies'][$index]['xhttp-opts']);
+            unset($c['proxies'][$index]['ws-opts'], $c['proxies'][$index]['flow']);
 
             return;
         }
@@ -412,7 +420,6 @@ NGINX;
     server {
         listen          443 udp reuseport;
         proxy_pass      hysteria;
-        proxy_protocol  on;
     }
 NGINX;
         $fallbackUdp = <<<'NGINX'
@@ -420,7 +427,6 @@ NGINX;
     server {
         listen          443 udp reuseport;
         proxy_pass      other;
-        proxy_protocol  on;
     }
 NGINX;
         $pattern = '~\n\s*server\s*\{[^{}]*listen\s+443\s+udp[^{}]*\}\s*~s';

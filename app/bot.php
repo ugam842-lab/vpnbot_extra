@@ -1461,26 +1461,19 @@ class Bot
         $this->ensureServiceCertBundle();
         $pac = $this->getPacConf();
         $global = $this->getTransportRegistryGlobal($pac);
-        $this->ssh('pkill -f "[h]ysteria server" || true', 'hy');
+        // Убить ВСЕ запущенные копии hysteria, а не только одну. Процесс
+        // поднимается так: nohup sh -c "hysteria server ... | tee -a ..." —
+        // поэтому паттерн "[h]ysteria server" не матчит обёртку sh -c, и
+        // предыдущие копии накапливались (шесть процессов дрались за :443 по
+        // reuseport — рукопожатие клиентов рвалось). Ловим и бинарь, и его
+        // обёртку по точному имени процесса, без хвоста tee.
+        $this->ssh('pkill -x hysteria 2>/dev/null; pkill -f "hysteria server" 2>/dev/null; sleep 1; true', 'hy');
         if (empty($global['hysteria']) || empty($pac['hysteria_pass'])) {
             return;
         }
-        $c = yaml_parse_file('/config/hysteria.yaml');
-        if (!is_array($c)) {
-            $c = [];
-        }
-        $c['auth']['type'] = 'password';
-        $c['auth']['password'] = $pac['hysteria_pass'];
         $hash = $this->getHashBot();
         $domain = $this->getDomain();
-        $scheme = empty($this->nginxGetTypeCert()) ? 'http' : 'https';
-        $c['masquerade'] = [
-            'type'  => 'proxy',
-            'proxy' => [
-                'url'         => $scheme . '://' . $domain . $this->getHyTransportPath($hash) . '/',
-                'rewriteHost' => true,
-            ],
-        ];
+        $c = $this->buildHysteriaServerConfig($pac, $hash, $domain, empty($this->nginxGetTypeCert()) ? false : true);
         yaml_emit_file('/config/hysteria.yaml', $c);
         $this->ssh('hysteria server -c /config/hysteria.yaml', 'hy', false, '/logs/hysteria');
         $this->invalidateMenuServiceStatusCache();
