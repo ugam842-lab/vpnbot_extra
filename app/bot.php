@@ -4969,12 +4969,14 @@ DNS-over-HTTPS with IP:
                     'callback_data' => "/download $client",
                 ],
             ];
-            $data[] = [
-                [
-                    'text'          => $this->i18n('client ikev2 profile'),
-                    'callback_data' => "/clientIkev2 {$client}_{$page}",
-                ],
-            ];
+            if ($this->isIkev2Enabled($clients[$client])) {
+                $data[] = [
+                    [
+                        'text'          => $this->i18n('client ikev2 profile'),
+                        'callback_data' => "/clientIkev2 {$client}_{$page}",
+                    ],
+                ];
+            }
 
             // Amnezia/WG: device limit + TG portal, only for subscription-backed
             // profiles (bound via ## owner_sub_id). The limit is `awg_limit` on the
@@ -8785,12 +8787,14 @@ DNS-over-HTTPS with IP:
                 'callback_data' => "/delxr $i",
             ],
         ];
-        $data[] = [
-            [
-                'text'          => $this->i18n('client ikev2 profile'),
-                'callback_data' => "/clientIkev2Xr $i",
-            ],
-        ];
+        if ($this->isIkev2Enabled($c)) {
+            $data[] = [
+                [
+                    'text'          => $this->i18n('client ikev2 profile'),
+                    'callback_data' => "/clientIkev2Xr $i",
+                ],
+            ];
+        }
         $data[] = [
             [
                 'text'          => $this->i18n('back'),
