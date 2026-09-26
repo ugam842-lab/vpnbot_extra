@@ -509,6 +509,22 @@ $i = [
         'en' => 'Run once on child VPS as root if sync returns 404 (old app). Then use sync/update from parent.',
         'ru' => 'Один раз на дочерней VPS от root, если sync даёт 404 (старый app). Потом sync/update с родителя.',
     ],
+    'nodes_detach' => [
+        'en' => 'detach',
+        'ru' => 'отвязать',
+    ],
+    'nodes_purge' => [
+        'en' => 'delete forever',
+        'ru' => 'удалить навсегда',
+    ],
+    'nodes_purge_confirm' => [
+        'en' => 'This permanently removes the node and its token. There is no undo. Continue?',
+        'ru' => 'Это навсегда удалит ноду и её токен. Вернуть нельзя. Продолжить?',
+    ],
+    'nodes_purge_yes' => [
+        'en' => 'yes, delete forever',
+        'ru' => 'да, удалить навсегда',
+    ],
     'nodes_upgrade_queued' => [
         'en' => 'update + config sync queued for all nodes (~1 min)',
         'ru' => 'обновление + синхронизация конфига поставлены в очередь для всех нод (~1 мин)',
@@ -900,6 +916,50 @@ $i = [
     'user portal wg empty' => [
         'en' => 'AmneziaWG is generated after the device connects once. Open the config in the app, then come back.',
         'ru' => 'AmneziaWG генерируется после первого подключения устройства. Откройте конфиг в приложении, затем вернитесь.',
+    ],
+    'user portal device ikev2' => [
+        'en' => 'IKEv2',
+        'ru' => 'IKEv2',
+    ],
+    'user portal ikev2 copy' => [
+        'en' => 'IKEv2 profile',
+        'ru' => 'Профиль IKEv2',
+    ],
+    'user portal ikev2 import link' => [
+        'en' => 'Login',
+        'ru' => 'Логин',
+    ],
+    'user portal ikev2 empty' => [
+        'en' => 'IKEv2 profile is unavailable. Contact support.',
+        'ru' => 'Профиль IKEv2 недоступен. Обратитесь в поддержку.',
+    ],
+    'client ikev2 profile' => [
+        'en' => 'IKEv2 profile',
+        'ru' => 'Профиль IKEv2',
+    ],
+    'client ikev2 download sswan' => [
+        'en' => 'Download .sswan (Android)',
+        'ru' => 'Скачать .sswan (Android)',
+    ],
+    'client ikev2 download mobileconfig' => [
+        'en' => 'Download .mobileconfig (iOS/macOS)',
+        'ru' => 'Скачать .mobileconfig (iOS/macOS)',
+    ],
+    'client ikev2 credentials' => [
+        'en' => 'Login',
+        'ru' => 'Логин',
+    ],
+    'client ikev2 password' => [
+        'en' => 'Password',
+        'ru' => 'Пароль',
+    ],
+    'client ikev2 server' => [
+        'en' => 'Server',
+        'ru' => 'Сервер',
+    ],
+    'client ikev2 unavailable' => [
+        'en' => 'IKEv2 profile is unavailable. Contact support.',
+        'ru' => 'Профиль IKEv2 недоступен. Обратитесь в поддержку.',
     ],
     'wg status unavailable' => [
         'en' => 'WireGuard status is unavailable.',
