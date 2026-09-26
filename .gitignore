@@ -20,6 +20,9 @@ mirror/.env
 update/*
 !update/update.sh
 
+__pycache__/
+*.pyc
+
 override.env
 override.html
 override.php
