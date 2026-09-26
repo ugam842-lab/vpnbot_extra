@@ -4969,12 +4969,14 @@ DNS-over-HTTPS with IP:
                     'callback_data' => "/download $client",
                 ],
             ];
-            $data[] = [
-                [
-                    'text'          => $this->i18n('client ikev2 profile'),
-                    'callback_data' => "/clientIkev2 {$client}_{$page}",
-                ],
-            ];
+            if ($this->isIkev2Enabled($clients[$client])) {
+                $data[] = [
+                    [
+                        'text'          => $this->i18n('client ikev2 profile'),
+                        'callback_data' => "/clientIkev2 {$client}_{$page}",
+                    ],
+                ];
+            }
 
             // Amnezia/WG: device limit + TG portal, only for subscription-backed
             // profiles (bound via ## owner_sub_id). The limit is `awg_limit` on the
@@ -8178,7 +8180,8 @@ DNS-over-HTTPS with IP:
         $text[] = 'transports: Reality=' . (int) !empty($globalTransports['reality'])
             . ' WS=' . (int) !empty($globalTransports['ws'])
             . ' XHTTP=' . (int) !empty($globalTransports['xhttp'])
-            . ' HY=' . (int) !empty($globalTransports['hysteria']);
+            . ' HY=' . (int) !empty($globalTransports['hysteria'])
+            . ' IKEv2=' . (int) !empty($globalTransports['ikev2']);
         $text[] = 'subscription: AWG=' . (int) !empty($globalTransports['awg']);
         if (!empty($fake) && !empty($globalTransports['reality'])) {
             $text[] = "fake domain: <code>$fake</code>";
@@ -8248,6 +8251,10 @@ DNS-over-HTTPS with IP:
             [
                 'text'          => 'AWG ' . $this->i18n('subscription transport') . ': ' . $this->i18n(!empty($globalTransports['awg']) ? 'on' : 'off'),
                 'callback_data' => '/toggleSubscriptionTransport awg',
+            ],
+            [
+                'text'          => 'IKEv2: ' . $this->i18n(!empty($globalTransports['ikev2']) ? 'on' : 'off'),
+                'callback_data' => '/toggleGlobalTransport ikev2',
             ],
         ];
         if (!empty($globalTransports['reality'])) {
@@ -8747,6 +8754,10 @@ DNS-over-HTTPS with IP:
                 'text'          => 'AWG ' . $this->i18n('subscription transport') . ': ' . $this->i18n(!empty($transportFlags['awg']) ? 'on' : 'off'),
                 'callback_data' => "/toggleUserTransport awg $i",
             ],
+            [
+                'text'          => 'IKEv2: ' . $this->i18n(!empty($transportFlags['ikev2']) ? 'on' : 'off'),
+                'callback_data' => "/toggleUserTransport ikev2 $i",
+            ],
         ];
         $data[] = [
             [
@@ -8785,12 +8796,14 @@ DNS-over-HTTPS with IP:
                 'callback_data' => "/delxr $i",
             ],
         ];
-        $data[] = [
-            [
-                'text'          => $this->i18n('client ikev2 profile'),
-                'callback_data' => "/clientIkev2Xr $i",
-            ],
-        ];
+        if ($this->isIkev2Enabled($c)) {
+            $data[] = [
+                [
+                    'text'          => $this->i18n('client ikev2 profile'),
+                    'callback_data' => "/clientIkev2Xr $i",
+                ],
+            ];
+        }
         $data[] = [
             [
                 'text'          => $this->i18n('back'),
@@ -11788,7 +11801,7 @@ DNS-over-HTTPS with IP:
 
     public function toggleGlobalTransport($name)
     {
-        $allowed = ['reality', 'ws', 'xhttp', 'hysteria'];
+        $allowed = ['reality', 'ws', 'xhttp', 'hysteria', 'ikev2'];
         if (!in_array($name, $allowed, true)) {
             $this->answer($this->input['callback_id'], 'unknown transport', true);
             return;
@@ -11798,7 +11811,10 @@ DNS-over-HTTPS with IP:
         $pac = $this->normalizeTransportRegistry($pac);
         $pac['transport_registry']['global'][$name] = !empty($pac['transport_registry']['global'][$name]) ? 0 : 1;
         $this->setPacConf($pac);
-        $this->applyTransportRegistryAndRuntime();
+        // IKEv2 is a flag, not an xray inbound: no runtime rebuild/reload needed.
+        if ($name !== 'ikev2') {
+            $this->applyTransportRegistryAndRuntime();
+        }
         $this->xrayCore();
     }
 
@@ -11824,7 +11840,7 @@ DNS-over-HTTPS with IP:
 
     public function toggleUserTransport($name, $i)
     {
-        $allowed = ['reality', 'ws', 'xhttp', 'hysteria', 'awg'];
+        $allowed = ['reality', 'ws', 'xhttp', 'hysteria', 'awg', 'ikev2'];
         if (!in_array($name, $allowed, true)) {
             $this->answer($this->input['callback_id'], 'unknown transport', true);
             return;

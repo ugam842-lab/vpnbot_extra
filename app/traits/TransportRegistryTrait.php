@@ -11,6 +11,9 @@ trait TransportRegistryTrait
             'hysteria' => 0,
             // Optional VLESS runtime device WG profile in subscriptions (WG1 service is always on).
             'awg' => 0,
+            // IKEv2 (strongSwan) profile availability, per-subscription. Server-side
+            // transport only — not an xray inbound, so it has no port default here.
+            'ikev2' => 0,
         ];
         $legacy = (string) ($conf['transport'] ?? 'Websocket');
         if ($legacy === 'Reality') {
