@@ -22,10 +22,10 @@ trait HwidTrait
     }
     protected function retireParentRuntimeUuid(array &$xray, int $ownerIndex): bool
     {
-        if (!isset($xray['inbounds'][0]['settings']['clients'][$ownerIndex])) {
+        $owner = $this->findXrayClientByIndex($xray, $ownerIndex);
+        if (!is_array($owner)) {
             return false;
         }
-        $owner = &$xray['inbounds'][0]['settings']['clients'][$ownerIndex];
         if (!empty($owner['device_parent_id']) || !empty($owner['runtime_parent_retired'])) {
             return false;
         }
@@ -36,10 +36,18 @@ trait HwidTrait
         while ($this->findXrayClientIndexById($xray, $newId) !== null) {
             $newId = $this->createXrayUuid();
         }
-        $owner['id'] = $newId;
-        $owner['runtime_parent_retired'] = 1;
+        // Запись берём по ссылке, иначе правка уйдёт в копию.
+        foreach ($this->forEachXrayClient($xray) as $entry) {
+            if ($entry['index'] !== $ownerIndex) {
+                continue;
+            }
+            $xray['inbounds'][$entry['inbound']]['settings']['clients'][$entry['offset']]['id'] = $newId;
+            $xray['inbounds'][$entry['inbound']]['settings']['clients'][$entry['offset']]['runtime_parent_retired'] = 1;
 
-        return true;
+            return true;
+        }
+
+        return false;
     }
     public function hwidLimit()
     {
@@ -636,6 +644,13 @@ trait HwidTrait
             return true;
         }
 
+        // Устройство ссылается на владельца через device_parent_id, а самого
+        // владельца может не быть отдельной записью в clients (он живёт как
+        // владелец device-записей). Ссылка подписки указывает именно на него.
+        if (($client['device_parent_id'] ?? '') === $requestedId) {
+            return true;
+        }
+
         $legacy = $client['subscription_legacy_ids'] ?? [];
         if (is_array($legacy) && in_array($requestedId, $legacy, true)) {
             return true;
@@ -645,27 +660,82 @@ trait HwidTrait
     }
     protected function ensureOwnerSubscriptionAnchor(array &$xray, int $ownerIndex): bool
     {
-        if (!isset($xray['inbounds'][0]['settings']['clients'][$ownerIndex])) {
-            return false;
+        if (!empty($xray['inbounds'][0]['settings']['clients'][$ownerIndex])
+            && is_array($xray['inbounds'][0]['settings']['clients'][$ownerIndex])) {
+            return $this->anchorOwnerClient(
+                $xray['inbounds'][0]['settings']['clients'][$ownerIndex],
+                (string) ($xray['inbounds'][0]['settings']['clients'][$ownerIndex]['id'] ?? '')
+            );
         }
 
-        $owner = &$xray['inbounds'][0]['settings']['clients'][$ownerIndex];
+        // Клиента-владельца может не быть отдельной записью: он существует как
+        // владелец device-записей (device_parent_id). В этом случае опорной
+        // подпиской становится его id, выставленный на устройствах, а не индекс.
+        return $this->anchorOwnerByDevices($xray, (string) $ownerIndex);
+    }
+
+    /**
+     * Проставить владельцу subscription_id + legacy id, если их ещё нет.
+     *
+     * @param array  $owner    запись клиента-владельца (по ссылке)
+     * @param string $anchorId id, которым подписывается владелец
+     */
+    protected function anchorOwnerClient(array &$owner, string $anchorId): bool
+    {
         if (!empty($owner['subscription_id'])) {
             return false;
         }
+        if ($anchorId === '') {
+            return false;
+        }
 
-        $owner['subscription_id'] = (string) $owner['id'];
+        $owner['subscription_id'] = $anchorId;
         if (!isset($owner['subscription_legacy_ids']) || !is_array($owner['subscription_legacy_ids'])) {
             $owner['subscription_legacy_ids'] = [];
         }
-        if (!in_array($owner['id'], $owner['subscription_legacy_ids'], true)) {
-            $owner['subscription_legacy_ids'][] = (string) $owner['id'];
+        if (!in_array($anchorId, $owner['subscription_legacy_ids'], true)) {
+            $owner['subscription_legacy_ids'][] = $anchorId;
         }
         // Parent UUID is retired when the first runtime device is registered.
         if (!array_key_exists('runtime_parent_retired', $owner)) {
             $owner['runtime_parent_retired'] = 0;
         }
+
         return true;
+    }
+
+    /**
+     * Опорная подписка для владельца, у которого нет отдельной client-записи:
+     * владелец задан id, на который ссылаются его устройства.
+     *
+     * @param array  $xray     декодированный xray.json (по ссылке)
+     * @param string $ownerSub id владельца (device_parent_id его устройств)
+     */
+    protected function anchorOwnerByDevices(array &$xray, string $ownerSub): bool
+    {
+        if ($ownerSub === '') {
+            return false;
+        }
+        foreach (($xray['inbounds'] ?? []) as $inbound) {
+            $clients = $inbound['settings']['clients'] ?? null;
+            if (!is_array($clients)) {
+                continue;
+            }
+            foreach ($clients as &$client) {
+                if (!is_array($client)) {
+                    continue;
+                }
+                if ((string) ($client['device_parent_id'] ?? '') !== $ownerSub) {
+                    continue;
+                }
+                unset($client);
+
+                return true;
+            }
+            unset($client);
+        }
+
+        return false;
     }
 
     protected function createRuntimeDeviceClient(array $owner, string $ownerSubId, string $deviceUuid, string $hwid): array
@@ -1326,16 +1396,141 @@ trait HwidTrait
         return count($uuids);
     }
 
+    /**
+     * Клиент xray по индексу (сквозной, в порядке inbounds) либо по его id.
+     *
+     * После миграции на XHTTP+Reality рабочий inbound перестал быть нулевым,
+     * поэтому поиск идёт по всем inbound'ам, а не по inbounds[0].
+     *
+     * @param array      $xray декодированный xray.json
+     * @param int|string $ref  индекс клиента (int) или его id (uuid-строка)
+     *
+     * @return array|null запись клиента либо null
+     */
+    protected function findXrayClientByIndexOrId(array $xray, $ref): ?array
+    {
+        if (is_int($ref)) {
+            return $this->findXrayClientByIndex($xray, $ref);
+        }
+        // Числовая строка — это индекс из callback_data, а не id клиента.
+        // ctype_digit() не используем: расширение ctype есть не везде.
+        if (is_string($ref) && $ref !== '' && strspn($ref, '0123456789') === strlen($ref)) {
+            return $this->findXrayClientByIndex($xray, (int) $ref);
+        }
+
+        $id = (string) $ref;
+        if ($id === '') {
+            return null;
+        }
+        foreach ($this->forEachXrayClient($xray) as $entry) {
+            if ((string) ($entry['client']['id'] ?? '') === $id) {
+                return $entry['client'];
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Клиент по сквозному индексу (клиенты в порядке inbounds).
+     *
+     * @param array $xray  декодированный xray.json
+     * @param int   $index сквозной индекс клиента
+     *
+     * @return array|null запись клиента либо null, если индекса нет
+     */
+    protected function findXrayClientByIndex(array $xray, int $index): ?array
+    {
+        if ($index < 0) {
+            return null;
+        }
+        foreach ($this->forEachXrayClient($xray) as $entry) {
+            if ($entry['index'] === $index) {
+                return $entry['client'];
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Обойти всех клиентов всех inbound'ов в сквозном порядке.
+     *
+     * После миграции на XHTTP+Reality рабочих inbound'ов несколько, поэтому
+     * код, которому нужен клиент по «сквозному» индексу админки, не может
+     * опираться на inbounds[0].
+     *
+     * @param array $xray декодированный xray.json
+     *
+     * @return \Generator<array{inbound:int,offset:int,index:int,client:array}>
+     */
+    protected function forEachXrayClient(array $xray): \Generator
+    {
+        $offset = 0;
+        foreach (($xray['inbounds'] ?? []) as $inboundIdx => $inbound) {
+            $clients = $inbound['settings']['clients'] ?? null;
+            if (!is_array($clients)) {
+                continue;
+            }
+            foreach ($clients as $k => $client) {
+                if (!is_array($client)) {
+                    continue;
+                }
+                yield [
+                    'inbound' => (int) $inboundIdx,
+                    'offset'  => (int) $k,
+                    'index'   => $offset + (int) $k,
+                    'client'  => $client,
+                ];
+            }
+            $offset += count($clients);
+        }
+    }
+
+    /**
+     * Дописать клиента в рабочий inbound.
+     *
+     * Новые клиенты (устройства, конфиги) обязаны попадать в транспортный
+     * inbound, а не в нулевой: после миграции на XHTTP+Reality нулевой
+     * (vless_tls) может оставаться пустым. Inbound без собственного списка
+     * клиентов (relay/CDN, не хранит settings.clients) не трогаем — иначе
+     * создали бы ему чужой ключ clients.
+     *
+     * @param array $xray   декодированный xray.json (по ссылке)
+     * @param array $client запись клиента
+     */
+    protected function appendXrayClient(array &$xray, array $client): void
+    {
+        $target = null;
+        foreach (($xray['inbounds'] ?? []) as $inboundIdx => $inbound) {
+            if (!is_array($inbound['settings']['clients'] ?? null)) {
+                continue;
+            }
+            $target = (int) $inboundIdx;
+            // Приоритет — рабочий inbound, в котором уже есть клиенты.
+            if (count($inbound['settings']['clients']) > 0) {
+                break;
+            }
+        }
+
+        if ($target === null) {
+            return;
+        }
+
+        $xray['inbounds'][$target]['settings']['clients'][] = $client;
+    }
+
     protected function ensureRuntimeDeviceUuid(array $ownerClient, int $ownerIndex, string $hwid, int $limit): ?string
     {
         $xray = $this->getXray();
-        if (!isset($xray['inbounds'][0]['settings']['clients'][$ownerIndex])) {
+        $owner = $this->findXrayClientByIndex($xray, $ownerIndex);
+        if (!is_array($owner)) {
             return null;
         }
 
         $changed = $this->ensureOwnerSubscriptionAnchor($xray, $ownerIndex);
-        $owner = $xray['inbounds'][0]['settings']['clients'][$ownerIndex];
         $ownerSubId = $this->getClientSubscriptionId($owner);
+        $ownerClientRef = (string) ($owner['id'] ?? '');
 
         $storage = $this->getHwidStorage();
         $devices = $storage[$ownerSubId] ?? [];
@@ -1346,7 +1541,8 @@ trait HwidTrait
         // Build an index of existing runtime device clients for this subscription.
         // One (parent_id, hwid) must map to exactly one device UUID.
         $existingByHwid = [];
-        foreach (($xray['inbounds'][0]['settings']['clients'] ?? []) as $idx => $client) {
+        foreach ($this->forEachXrayClient($xray) as $entry) {
+            $client = $entry['client'];
             if (($client['device_parent_id'] ?? '') !== $ownerSubId) {
                 continue;
             }
@@ -1358,12 +1554,12 @@ trait HwidTrait
             if (!isset($existingByHwid[$childHwid])) {
                 $existingByHwid[$childHwid] = [
                     'id' => $childId,
-                    'idx' => $idx,
+                    'idx' => $entry['index'],
                 ];
                 continue;
             }
             // Duplicate child for same parent+hwid: keep first, remove the rest.
-            unset($xray['inbounds'][0]['settings']['clients'][$idx]);
+            unset($xray['inbounds'][$entry['inbound']]['settings']['clients'][$entry['offset']]);
             $changed = true;
         }
 
@@ -1392,7 +1588,7 @@ trait HwidTrait
             }
             if (!empty($info['device_uuid'])) {
                 if ($this->findXrayClientIndexById($xray, (string) $info['device_uuid']) === null) {
-                    $xray['inbounds'][0]['settings']['clients'][] = $this->createRuntimeDeviceClient($owner, $ownerSubId, (string) $info['device_uuid'], (string) $storedHwid);
+                    $this->appendXrayClient($xray, $this->createRuntimeDeviceClient($owner, $ownerSubId, (string) $info['device_uuid'], (string) $storedHwid));
                     $changed = true;
                 }
                 continue;
@@ -1409,7 +1605,7 @@ trait HwidTrait
                 $deviceUuid = $this->createXrayUuid();
             }
             $devices[$storedHwid]['device_uuid'] = $deviceUuid;
-            $xray['inbounds'][0]['settings']['clients'][] = $this->createRuntimeDeviceClient($owner, $ownerSubId, $deviceUuid, (string) $storedHwid);
+            $this->appendXrayClient($xray, $this->createRuntimeDeviceClient($owner, $ownerSubId, $deviceUuid, (string) $storedHwid));
             $changed = true;
         }
 
@@ -1436,7 +1632,7 @@ trait HwidTrait
                 'runtime_confirmed' => 1,
             ];
             if (empty($existingByHwid[$hwid]['id'])) {
-                $xray['inbounds'][0]['settings']['clients'][] = $this->createRuntimeDeviceClient($owner, $ownerSubId, $deviceUuid, $hwid);
+                $this->appendXrayClient($xray, $this->createRuntimeDeviceClient($owner, $ownerSubId, $deviceUuid, $hwid));
                 $changed = true;
             }
         } else {
@@ -1448,7 +1644,7 @@ trait HwidTrait
                     while ($this->findXrayClientIndexById($xray, $deviceUuid) !== null) {
                         $deviceUuid = $this->createXrayUuid();
                     }
-                    $xray['inbounds'][0]['settings']['clients'][] = $this->createRuntimeDeviceClient($owner, $ownerSubId, $deviceUuid, $hwid);
+                    $this->appendXrayClient($xray, $this->createRuntimeDeviceClient($owner, $ownerSubId, $deviceUuid, $hwid));
                     $changed = true;
                 }
                 $devices[$hwid]['device_uuid'] = $deviceUuid;
@@ -1905,6 +2101,92 @@ trait HwidTrait
         $this->writeXrayConfig($xray);
         $this->send($this->input['chat'], $this->i18n('hwid notice'), $this->input['message_id']);
         $this->hwidUser($i);
+    }
+
+    /**
+     * Resolve the owner xray client index for a subscription id, or null when the
+     * subscription has no (active) owner client. Mirrors resolveSubscriptionClient
+     * but stays in this trait so the WG branch can depend on HwidTrait alone.
+     */
+    protected function getOwnerXrayClientIndexBySubId(string $subscriptionId): ?int
+    {
+        $xr = $this->getXray();
+        $offset = 0;
+        foreach (($xr['inbounds'] ?? []) as $inbound) {
+            $clients = $inbound['settings']['clients'] ?? null;
+            if (!is_array($clients)) {
+                continue;
+            }
+            foreach ($clients as $k => $v) {
+                if (!is_array($v) || !empty($v['device_parent_id'])) {
+                    continue;
+                }
+                if ($this->isSubscriptionIdMatch($v, $subscriptionId)) {
+                    return $offset + (int) $k;
+                }
+            }
+            $offset += count($clients);
+        }
+        return null;
+    }
+
+    /**
+     * Amnezia/WG device limit for a subscription. Independent of VLESS
+     * `hwid_limit`. Stored on the owner xray client as `awg_limit`; defaults to
+     * the global `awg_device_count` (10) when unset, preserving zero as "unlimit".
+     */
+    protected function getAwgLimit(?int $ownerIdx): int
+    {
+        $pac = $this->getPacConf();
+        $default = (int) ($pac['awg_device_count'] ?? 10);
+        if ($default <= 0) {
+            $default = 10;
+        }
+        if ($ownerIdx === null) {
+            return $default;
+        }
+        $xr = $this->getXray();
+        $client = $xr['inbounds'][0]['settings']['clients'][$ownerIdx] ?? null;
+        if (!is_array($client) || !array_key_exists('awg_limit', $client)) {
+            return $default;
+        }
+        return (int) $client['awg_limit'];
+    }
+
+    public function setAwgUserLimit($clientIndex)
+    {
+        $clients = $this->readClients();
+        $ownerSubId = (string) ($clients[$clientIndex]['interface']['## owner_sub_id'] ?? '');
+        $r = $this->send(
+            $this->input['chat'],
+            $this->i18n('set awg devices count'),
+            $this->input['message_id'],
+            reply: $this->i18n('set awg devices count'),
+        );
+        $_SESSION['reply'][$r['result']['message_id']] = [
+            'start_message' => $this->input['message_id'],
+            'callback'      => 'saveAwgUserLimit',
+            'args'          => [$clientIndex, $ownerSubId],
+        ];
+    }
+
+    public function saveAwgUserLimit($count, $clientIndex, $ownerSubId)
+    {
+        $ownerIdx = $this->getOwnerXrayClientIndexBySubId($ownerSubId);
+        if ($ownerIdx === null) {
+            $this->getClient($clientIndex, 0);
+            return;
+        }
+        $xray = $this->getXray();
+        $count = (int) $count;
+        if ($count >= 0) {
+            $xray['inbounds'][0]['settings']['clients'][$ownerIdx]['awg_limit'] = $count;
+        } else {
+            unset($xray['inbounds'][0]['settings']['clients'][$ownerIdx]['awg_limit']);
+        }
+        $this->writeXrayConfig($xray);
+        $this->send($this->input['chat'], $this->i18n('awg limit notice'), $this->input['message_id']);
+        $this->getClient($clientIndex, 0);
     }
 
     public function hwidUserDel($i, $page, $hwid)

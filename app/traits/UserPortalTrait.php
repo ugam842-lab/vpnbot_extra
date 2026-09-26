@@ -88,6 +88,14 @@ trait UserPortalTrait
 
                 return;
             }
+            // Edit вернул ошибку. Если это «message is not modified» — меню на
+            // экране уже корректно, повторный send() только задвоит его. Тихо
+            // сохраняем id и выходим, остальное — честный фолбэк в send().
+            if ($this->isMessageNotModified($r)) {
+                $this->setUserPortalUiMessageId($messageId);
+
+                return;
+            }
             unset($_SESSION['userPortalUi']['message_id'], $_SESSION['reply'][$messageId]);
         }
 
@@ -103,6 +111,13 @@ trait UserPortalTrait
                 ]);
             }
         }
+    }
+
+    protected function isMessageNotModified($r): bool
+    {
+        return !empty($r)
+            && empty($r['ok'])
+            && stripos((string) ($r['description'] ?? ''), 'not modified') !== false;
     }
 
     protected function userPortalPromptInput(string $text, string $callback, array $args = [], $buttons = false): void
@@ -209,6 +224,11 @@ trait UserPortalTrait
         $ownerSubId = $session['subscription_id'];
         $deviceCount = count($this->getHwidDevicesByUser($ownerSubId));
         $lines[] = $this->i18n('hwid devices') . ': ' . $deviceCount;
+        if ($this->isRuntimeDeviceWgEnabled($client)) {
+            $ownerIdx = $this->getOwnerXrayClientIndexBySubId($ownerSubId);
+            $awgLimit = $this->getAwgLimit($ownerIdx);
+            $lines[] = $this->i18n('awg limit') . ': ' . $deviceCount . ' ' . $this->i18n('of') . ' ' . $awgLimit;
+        }
         $lines[] = $this->i18n('user portal delete password') . ': ' . $this->i18n(
             $this->hasSubscriptionDevicePassword($client) ? 'user portal password set' : 'user portal password not set'
         );
@@ -332,7 +352,7 @@ trait UserPortalTrait
         $message = (string) ($this->input['message'] ?? '');
         $callback = (string) ($this->input['callback'] ?? '');
 
-        if (preg_match('~^/(?:start|menu)$~', $message)) {
+        if (preg_match('~^/(?:start|menu|update)$~', $message)) {
             return true;
         }
         if (preg_match('~^/userPortal~', $callback)) {
@@ -638,8 +658,9 @@ trait UserPortalTrait
             return null;
         }
         $xr = $this->getXray();
-        foreach ($xr['inbounds'][0]['settings']['clients'] as $k => $v) {
-            if (!is_array($v) || !empty($v['device_parent_id'])) {
+        foreach ($this->forEachXrayClient($xr) as $entry) {
+            $v = $entry['client'];
+            if (!empty($v['device_parent_id'])) {
                 continue;
             }
             if (!$this->isSubscriptionIdMatch($v, $subscriptionId)) {
@@ -650,7 +671,24 @@ trait UserPortalTrait
             }
 
             return [
-                'index'           => $k,
+                // Индекс сквозной, как в админке (клиенты в порядке inbounds).
+                'index'           => $entry['index'],
+                'client'          => $v,
+                'subscription_id' => $this->getClientSubscriptionId($v),
+            ];
+        }
+
+        // Отдельной записи владельца может не быть — он существует как
+        // device_parent_id своих устройств. Ссылка подписки указывает на него,
+        // поэтому опираемся на владельца первой такой device-записи.
+        foreach ($this->forEachXrayClient($xr) as $entry) {
+            $v = $entry['client'];
+            if (($v['device_parent_id'] ?? '') !== $subscriptionId) {
+                continue;
+            }
+
+            return [
+                'index'           => $entry['index'],
                 'client'          => $v,
                 'subscription_id' => $this->getClientSubscriptionId($v),
             ];
@@ -1176,6 +1214,12 @@ trait UserPortalTrait
                         'callback_data' => "/userPortalDeviceWg {$page}_{$token}",
                     ];
                 }
+                if ($this->isIkev2Enabled($client)) {
+                    $row[] = [
+                        'text'          => $this->i18n('user portal device ikev2'),
+                        'callback_data' => "/userPortalDeviceIkev2 {$page}_{$token}",
+                    ];
+                }
                 $data[] = $row;
                 if ($this->hasSubscriptionDevicePassword($client)) {
                     $data[] = [[
@@ -1264,19 +1308,24 @@ trait UserPortalTrait
     protected function getHwidDeviceVlessLink(string $ownerSubId, string $hwid): string
     {
         $xray = $this->getXray();
-        $clients = $xray['inbounds'][0]['settings']['clients'] ?? [];
-        foreach ($clients as $index => $client) {
-            if (!is_array($client)) {
+        foreach (($xray['inbounds'] ?? []) as $inbound) {
+            $clients = $inbound['settings']['clients'] ?? null;
+            if (!is_array($clients)) {
                 continue;
             }
-            if (($client['device_parent_id'] ?? '') !== $ownerSubId) {
-                continue;
-            }
-            if ((string) ($client['device_hwid'] ?? '') !== $hwid) {
-                continue;
-            }
+            foreach ($clients as $client) {
+                if (!is_array($client)) {
+                    continue;
+                }
+                if (($client['device_parent_id'] ?? '') !== $ownerSubId) {
+                    continue;
+                }
+                if ((string) ($client['device_hwid'] ?? '') !== $hwid) {
+                    continue;
+                }
 
-            return $this->linkXray($index);
+                return $this->linkXray((string) $client['id']);
+            }
         }
 
         return '';
@@ -1314,13 +1363,22 @@ trait UserPortalTrait
         $text[] = '';
 
         $conf = '';
+        $shortLink = '';
         if ($deviceUuid !== '') {
             $conf = $this->getHwidDeviceWgConf($ownerSubId, $hwid, $deviceUuid);
+            if ($conf !== '') {
+                $shortLink = $this->getHwidDeviceWgShortLink($ownerSubId, $hwid, $deviceUuid);
+            }
         }
 
         if ($conf === '') {
             $text[] = $this->i18n('user portal wg empty');
         } else {
+            if ($shortLink !== '') {
+                $text[] = $this->i18n('user portal wg amnezia link') . ':';
+                $text[] = '<code>' . htmlspecialchars($shortLink, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</code>';
+                $text[] = '';
+            }
             $text[] = '<pre><code>' . htmlspecialchars($conf, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</code></pre>';
         }
 
@@ -1328,6 +1386,10 @@ trait UserPortalTrait
             'text'          => $this->i18n('back'),
             'callback_data' => '/userPortalDevices_' . (int) explode('_', (string) $pageToken)[0],
         ]]]);
+
+        if ($shortLink !== '') {
+            $this->sendQr($name !== '' ? $name : $hwid, preg_replace('~^vpn://~', '', $shortLink), ($name !== '' ? $name : $hwid) . ' — AmneziaVPN');
+        }
     }
 
     protected function getHwidDeviceWgConf(string $ownerSubId, string $hwid, string $deviceUuid): string
@@ -1341,6 +1403,20 @@ trait UserPortalTrait
 
         return (string) $this->runInRuntimeWgContext(function () use ($wgClient) {
             return $this->createConfig($wgClient);
+        });
+    }
+
+    protected function getHwidDeviceWgShortLink(string $ownerSubId, string $hwid, string $deviceUuid): string
+    {
+        $wgClient = $this->runInRuntimeWgContext(function () use ($ownerSubId, $hwid, $deviceUuid) {
+            return $this->ensureDeviceWgProfile($ownerSubId, $hwid, $deviceUuid);
+        });
+        if (!is_array($wgClient)) {
+            return '';
+        }
+
+        return (string) $this->runInRuntimeWgContext(function () use ($wgClient) {
+            return $this->getAmneziaShortLink($wgClient);
         });
     }
 
@@ -1509,7 +1585,7 @@ trait UserPortalTrait
     protected function userPortalGrantSubscriptionId(int $i): string
     {
         $xr = $this->getXray();
-        $c = $xr['inbounds'][0]['settings']['clients'][$i] ?? null;
+        $c = $this->findXrayClientByIndex($xr, $i);
         return is_array($c) ? $this->getClientSubscriptionId($c) : '';
     }
 
@@ -1548,6 +1624,115 @@ trait UserPortalTrait
             ],
         ]];
         $this->update($this->input['chat'], $this->input['message_id'], implode("\n", $text), $data);
+    }
+
+    public function userPortalGrantWg($clientIndex)
+    {
+        $clientIndex = (int) $clientIndex;
+        $clients = $this->readClients();
+        $subscriptionId = (string) ($clients[$clientIndex]['interface']['## owner_sub_id'] ?? '');
+        $text = [$this->i18n('user portal grant title')];
+        if ($subscriptionId === '') {
+            $text[] = $this->i18n('user portal grant not found');
+        } else {
+            $text[] = $this->i18n('user portal grant sub') . ': <code>' . htmlspecialchars($subscriptionId, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</code>';
+            $ids = $this->getUserPortalBindingTelegramIds($subscriptionId);
+            if (empty($ids)) {
+                $text[] = $this->i18n('user portal grant empty');
+            } else {
+                $text[] = $this->i18n('user portal grant bound');
+                foreach ($ids as $id) {
+                    $text[] = '· <code>' . htmlspecialchars($id, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</code>';
+                }
+            }
+        }
+        $data = [[
+            [
+                'text'          => $this->i18n('user portal grant set'),
+                'callback_data' => "/userPortalGrantSetWg $clientIndex",
+            ],
+            [
+                'text'          => $this->i18n('user portal grant revoke'),
+                'callback_data' => "/userPortalGrantRevokeWg $clientIndex",
+            ],
+        ], [
+            [
+                'text'          => $this->i18n('back'),
+                'callback_data' => "/menu client {$clientIndex}_0",
+            ],
+        ]];
+        $this->update($this->input['chat'], $this->input['message_id'], implode("\n", $text), $data);
+    }
+
+    public function userPortalGrantSetWg($clientIndex)
+    {
+        $clientIndex = (int) $clientIndex;
+        $r = $this->send(
+            $this->input['chat'],
+            $this->i18n('user portal grant prompt'),
+            $this->input['message_id'],
+            reply: $this->i18n('user portal grant placeholder'),
+        );
+        $_SESSION['reply'][$r['result']['message_id']] = [
+            'start_message'  => $this->input['message_id'],
+            'start_callback' => $this->input['callback_id'],
+            'callback'       => 'userPortalGrantSetSaveWg',
+            'args'           => [$clientIndex],
+        ];
+    }
+
+    public function userPortalGrantSetSaveWg($text, $clientIndex)
+    {
+        $clientIndex = (int) $clientIndex;
+        $telegramId = trim((string) $text);
+        if (!preg_match('~^\d{5,}$~', $telegramId)) {
+            $this->userPortalGrantWg($clientIndex);
+
+            return;
+        }
+        $clients = $this->readClients();
+        $subscriptionId = (string) ($clients[$clientIndex]['interface']['## owner_sub_id'] ?? '');
+        if ($subscriptionId === '') {
+            $this->userPortalGrantWg($clientIndex);
+
+            return;
+        }
+        $this->setUserPortalBinding($telegramId, $subscriptionId);
+        $resolved = $this->resolveSubscriptionClient($subscriptionId);
+        if ($resolved !== null) {
+            $this->notifySubscriptionUsers($resolved['client'], 'appeared');
+        }
+        $this->userPortalGrantWg($clientIndex);
+    }
+
+    public function userPortalGrantRevokeWg($clientIndex)
+    {
+        $clientIndex = (int) $clientIndex;
+        $r = $this->send(
+            $this->input['chat'],
+            $this->i18n('user portal grant revoke prompt'),
+            $this->input['message_id'],
+            reply: $this->i18n('user portal grant placeholder'),
+        );
+        $_SESSION['reply'][$r['result']['message_id']] = [
+            'start_message'  => $this->input['message_id'],
+            'start_callback' => $this->input['callback_id'],
+            'callback'       => 'userPortalGrantRevokeSaveWg',
+            'args'           => [$clientIndex],
+        ];
+    }
+
+    public function userPortalGrantRevokeSaveWg($text, $clientIndex)
+    {
+        $clientIndex = (int) $clientIndex;
+        $telegramId = trim((string) $text);
+        if (!preg_match('~^\d{5,}$~', $telegramId)) {
+            $this->userPortalGrantWg($clientIndex);
+
+            return;
+        }
+        $this->removeUserPortalBinding($telegramId);
+        $this->userPortalGrantWg($clientIndex);
     }
 
     public function userPortalGrantSet($i)
@@ -1660,6 +1845,11 @@ trait UserPortalTrait
             ],
         ], [
             [
+                'text'          => $this->i18n('user portal issue config'),
+                'callback_data' => '/userPortalIssueConfigPrompt',
+            ],
+        ], [
+            [
                 'text'          => $this->i18n('back'),
                 'callback_data' => '/menu config',
             ],
@@ -1763,6 +1953,87 @@ trait UserPortalTrait
         }
         $this->removeUserPortalBinding($telegramId);
         $this->userPortalSetFlash('✅ ' . $this->i18n('user portal revoke ok'));
+        $this->userPortalUsers();
+    }
+
+    public function userPortalIssueConfigPrompt()
+    {
+        if (!$this->admin) {
+            return;
+        }
+        $r = $this->send(
+            $this->input['chat'],
+            $this->i18n('user portal issue config prompt'),
+            $this->input['message_id'],
+            reply: $this->i18n('user portal grant placeholder'),
+        );
+        $_SESSION['reply'][$r['result']['message_id']] = [
+            'start_message'  => $this->input['message_id'],
+            'start_callback' => $this->input['callback_id'],
+            'callback'       => 'userPortalIssueConfigSave',
+            'args'           => [],
+        ];
+    }
+
+    public function userPortalIssueConfigSave($text)
+    {
+        if (!$this->admin) {
+            return;
+        }
+        $telegramId = trim((string) $text);
+        if (!preg_match('~^\d{5,}$~', $telegramId)) {
+            $this->userPortalSetFlash('⚠️ ' . $this->i18n('user portal invalid id'));
+            $this->userPortalUsers();
+
+            return;
+        }
+        $subscriptionId = $this->getUserPortalBinding($telegramId);
+        if ($subscriptionId === null || $subscriptionId === '') {
+            $this->userPortalSetFlash('⚠️ ' . $this->i18n('user portal grant not found'));
+            $this->userPortalUsers();
+
+            return;
+        }
+
+        $resolved = $this->resolveSubscriptionClient($subscriptionId);
+        if ($resolved === null) {
+            $this->userPortalSetFlash('⚠️ ' . $this->i18n('user portal sub not found'));
+            $this->userPortalUsers();
+
+            return;
+        }
+
+        $client = $resolved['client'];
+        if (!$this->isRuntimeDeviceWgEnabled($client)) {
+            $this->userPortalSetFlash('⚠️ ' . $this->i18n('user portal wg empty'));
+            $this->userPortalUsers();
+
+            return;
+        }
+
+        // Force-issue the Amnezia/WG profile to every device of the subscription.
+        $ownerSubId = $resolved['subscription_id'];
+        $devices = $this->getHwidDevicesByUser($ownerSubId);
+        $issued = 0;
+        foreach ($devices as $hwid => $info) {
+            $deviceUuid = (string) ($info['device_uuid'] ?? '');
+            if ($deviceUuid === '') {
+                continue;
+            }
+            $conf = $this->getHwidDeviceWgConf($ownerSubId, $hwid, $deviceUuid);
+            if ($conf === '') {
+                continue;
+            }
+            if ($this->getHwidDeviceWgShortLink($ownerSubId, $hwid, $deviceUuid) !== '') {
+                $issued++;
+            }
+        }
+
+        if ($issued === 0) {
+            $this->userPortalSetFlash('⚠️ ' . $this->i18n('no devices'));
+        } else {
+            $this->userPortalSetFlash('✅ ' . $this->i18n('user portal issue config ok') . ' (' . $issued . ')');
+        }
         $this->userPortalUsers();
     }
 }

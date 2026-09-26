@@ -9,6 +9,7 @@ require_once __DIR__ . '/traits/HwidTrait.php';
 require_once __DIR__ . '/traits/LegacyRemovedTrait.php';
 require_once __DIR__ . '/traits/ClashTemplateTrait.php';
 require_once __DIR__ . '/traits/UserPortalTrait.php';
+require_once __DIR__ . '/traits/Ikev2Trait.php';
 require_once __DIR__ . '/traits/MirrorTrait.php';
 require_once __DIR__ . '/traits/NodeTrait.php';
 require_once __DIR__ . '/traits/LoggingTrait.php';
@@ -24,6 +25,7 @@ class Bot
     use LegacyRemovedTrait;
     use ClashTemplateTrait;
     use UserPortalTrait;
+    use Ikev2Trait;
     use MirrorTrait;
     use NodeTrait;
     use LoggingTrait;
@@ -245,7 +247,14 @@ class Bot
         }
 
         switch (true) {
-            case preg_match('~^/(?:start|menu)$~', $this->input['message'], $m):
+            case preg_match('~^/(?:start|menu|update)$~', $this->input['message'], $m):
+                if (!$this->admin && $this->isUserPortalEnabled()) {
+                    $this->userPortalMenu();
+                    break;
+                }
+                $this->menu();
+                break;
+            case preg_match('~^/update$~', $this->input['callback'], $m):
                 if (!$this->admin && $this->isUserPortalEnabled()) {
                     $this->userPortalMenu();
                     break;
@@ -294,6 +303,14 @@ class Bot
             case preg_match('~^/userPortalDeviceWg (\d+)_(\w+)$~', $this->input['callback'], $m):
                 $this->userPortalDeviceWg($m[1] . '_' . $m[2], $m[2]);
                 break;
+            case preg_match('~^/userPortalDeviceIkev2 (\d+)_(\w+)$~', $this->input['callback'], $m):
+                $this->userPortalDeviceIkev2($m[1] . '_' . $m[2], $m[2]);
+                break;
+            case preg_match('~^/clientIkev2 (\d+)_(\d+)$~', $this->input['callback'], $m):
+                $this->clientIkev2((int) $m[1], (int) $m[2]);
+            case preg_match('~^/clientIkev2Xr (\d+)$~', $this->input['callback'], $m):
+                $this->clientIkev2Xr((int) $m[1]);
+                break;
             case preg_match('~^/toggleUserPortal$~', $this->input['callback'], $m):
                 $this->toggleUserPortal();
                 break;
@@ -306,6 +323,18 @@ class Bot
             case preg_match('~^/userPortalGrantRevoke (\d+)$~', $this->input['callback'], $m):
                 $this->userPortalGrantRevoke((int) $m[1]);
                 break;
+            case preg_match('~^/userPortalGrantWg (\d+)$~', $this->input['callback'], $m):
+                $this->userPortalGrantWg((int) $m[1]);
+                break;
+            case preg_match('~^/userPortalGrantSetWg (\d+)$~', $this->input['callback'], $m):
+                $this->userPortalGrantSetWg((int) $m[1]);
+                break;
+            case preg_match('~^/userPortalGrantRevokeWg (\d+)$~', $this->input['callback'], $m):
+                $this->userPortalGrantRevokeWg((int) $m[1]);
+                break;
+            case preg_match('~^/userPortalIssueConfigPrompt$~', $this->input['callback'], $m):
+                $this->userPortalIssueConfigPrompt();
+                break;
             case preg_match('~^/userPortalUsers$~', $this->input['callback'], $m):
                 $this->userPortalUsers();
                 break;
@@ -316,9 +345,6 @@ class Bot
                 $this->userPortalRevokePrompt();
                 break;
             // ????? ???? ???????
-            case preg_match('~^/update$~', $this->input['callback'], $m):
-                $this->menu();
-                break;
             case preg_match('~^/menu$~', $this->input['callback'], $m):
             case preg_match('~^/menu (?P<type>addpeer) (?P<arg>(?:-)?\d+)$~', $this->input['callback'], $m):
             case preg_match('~^/menu (?P<type>wg) (?P<arg>(?:-)?\d+)$~', $this->input['callback'], $m):
@@ -397,6 +423,9 @@ class Bot
                 break;
             case preg_match('~^/setHwidUserLimit (\d+)$~', $this->input['callback'], $m):
                 $this->setHwidUserLimit($m[1]);
+                break;
+            case preg_match('~^/setAwgUserLimit (\d+)$~', $this->input['callback'], $m):
+                $this->setAwgUserLimit($m[1]);
                 break;
             case preg_match('~^/hwidUserDel (\d+)_(\d+) (.+)$~', $this->input['callback'], $m):
                 $this->hwidUserDel($m[1], $m[2], $m[3]);
@@ -4910,62 +4939,93 @@ DNS-over-HTTPS with IP:
             if ($this->getWGType() == 'awg') {
                 $sl = $this->getAmneziaShortLink($clients[$client]);
             }
+
+            $ownerSubId = (string) ($clients[$client]['interface']['## owner_sub_id'] ?? '');
+            $data[] = [
+                [
+                    'text'          =>  $this->i18n('rename'),
+                    'callback_data' => "/rename {$client}_$page",
+                ],
+                [
+                    'text'          =>  $this->i18n('timer'),
+                    'callback_data' => "/timer {$client}_$page",
+                ],
+            ];
+            $data[] = [
+                [
+                    'text'          => $this->i18n('show QR'),
+                    'callback_data' => "/qr $client",
+                ],
+                [
+                    'text'          => $this->i18n('download config'),
+                    'callback_data' => "/download $client",
+                ],
+            ];
+            $data[] = [
+                [
+                    'text'          => $this->i18n('client ikev2 profile'),
+                    'callback_data' => "/clientIkev2 {$client}_{$page}",
+                ],
+            ];
+
+            // Amnezia/WG: device limit + TG portal, only for subscription-backed
+            // profiles (bound via ## owner_sub_id). The limit is `awg_limit` on the
+            // owner xray client, default 10 — independent of VLESS `hwid_limit`.
+            if ($ownerSubId !== '') {
+                $ownerIdx = $this->getOwnerXrayClientIndexBySubId($ownerSubId);
+                $awgLimit = $this->getAwgLimit($ownerIdx);
+                $devices = $this->getHwidDevicesByUser($ownerSubId);
+                $used = count($devices);
+                $data[] = [
+                    [
+                        'text'          => $this->i18n('awg limit') . " ($used/$awgLimit)",
+                        'callback_data' => "/setAwgUserLimit {$client}",
+                    ],
+                ];
+                $grantCount = count($this->getUserPortalBindingTelegramIds($ownerSubId));
+                $data[] = [
+                    [
+                        'text'          => $this->i18n('user portal grant title') . ($grantCount > 0 ? " ({$grantCount})" : ''),
+                        'callback_data' => "/userPortalGrantWg {$client}",
+                    ],
+                ];
+            }
+
+            $data[] = [
+                [
+                    'text'          => $this->i18n($clients[$client]['# off'] ? 'off' : 'on'),
+                    'callback_data' => "/switchClient {$client}_$page",
+                ],
+                [
+                    'text'          => $this->i18n($clients[$client]['interface']['DNS'] ? 'delete internal dns' : 'set internal dns'),
+                    'callback_data' => "/" . ($clients[$client]['interface']['DNS'] ? 'delete' : '') . "dns {$client}_$page",
+                ],
+            ];
+            $data[] = [
+                [
+                    'text'          => $this->i18n('AllowedIPs'),
+                    'callback_data' => "/changeAllowedIps {$client}_$page",
+                ],
+            ];
+            $data[] = [
+                [
+                    'text'          => $this->i18n('MTU') . " " . ($clients[$client]['interface']['MTU'] ?: $this->getPacConf()[$this->getInstanceWG(1) . 'mtu'] ?: $this->mtu),
+                    'callback_data' => "/changeMTU {$client}_$page",
+                ],
+            ];
+            $data[] = [
+                [
+                    'text'          => $this->i18n('delete'),
+                    'callback_data' => "/delete {$client}_$page",
+                ],
+                [
+                    'text'          => $this->i18n('back'),
+                    'callback_data' => "/menu wg $page",
+                ],
+            ];
             return [
                 'text' => "<pre>$conf</pre>\n\n<code>$sl</code>\n\n<b>$name</b> ({$this->getTitleWG()})",
-                'data' => [
-                    [
-                        [
-                            'text'          =>  $this->i18n('rename'),
-                            'callback_data' => "/rename {$client}_$page",
-                        ],
-                        [
-                            'text'          =>  $this->i18n('timer'),
-                            'callback_data' => "/timer {$client}_$page",
-                        ],
-                    ],
-                    [
-                        [
-                            'text'          => $this->i18n('show QR'),
-                            'callback_data' => "/qr $client",
-                        ],
-                        [
-                            'text'          => $this->i18n('download config'),
-                            'callback_data' => "/download $client",
-                        ],
-                    ],
-                    [
-                        [
-                            'text'          => $this->i18n($clients[$client]['# off'] ? 'off' : 'on'),
-                            'callback_data' => "/switchClient {$client}_$page",
-                        ],
-                        [
-                            'text'          => $this->i18n($clients[$client]['interface']['DNS'] ? 'delete internal dns' : 'set internal dns'),
-                            'callback_data' => "/" . ($clients[$client]['interface']['DNS'] ? 'delete' : '') . "dns {$client}_$page",
-                        ],
-                    ],
-                    [
-                        [
-                            'text'          => $this->i18n('AllowedIPs'),
-                            'callback_data' => "/changeAllowedIps {$client}_$page",
-                        ],
-                    ],
-                    [
-                        [
-                            'text'          => $this->i18n('MTU') . " " . ($clients[$client]['interface']['MTU'] ?: $this->getPacConf()[$this->getInstanceWG(1) . 'mtu'] ?: $this->mtu),
-                            'callback_data' => "/changeMTU {$client}_$page",
-                        ],
-                    ],
-                    [
-                        [
-                            'text'          => $this->i18n('delete'),
-                            'callback_data' => "/delete {$client}_$page",
-                        ],
-                        [
-                            'text'          => $this->i18n('back'),
-                            'callback_data' => "/menu wg $page",
-                        ],
-                    ],
-                ],
+                'data' => $data,
             ];
         }
         return [
@@ -5970,10 +6030,21 @@ DNS-over-HTTPS with IP:
 
     protected function findXrayClientIndexById(array $xray, string $id): ?int
     {
-        foreach ($xray['inbounds'][0]['settings']['clients'] as $idx => $client) {
-            if (($client['id'] ?? '') === $id) {
-                return $idx;
+        if ($id === '') {
+            return null;
+        }
+        $offset = 0;
+        foreach (($xray['inbounds'] ?? []) as $inbound) {
+            $clients = $inbound['settings']['clients'] ?? null;
+            if (!is_array($clients)) {
+                continue;
             }
+            foreach ($clients as $idx => $client) {
+                if (is_array($client) && ($client['id'] ?? '') === $id) {
+                    return $offset + (int) $idx;
+                }
+            }
+            $offset += count($clients);
         }
         return null;
     }
@@ -6869,7 +6940,7 @@ DNS-over-HTTPS with IP:
         $globalTransports = $this->getTransportRegistryGlobal($pac);
         $domain = $this->getDomain(empty($globalTransports['reality']));
         $hash   = $this->getHashBot();
-        $client = $c['inbounds'][0]['settings']['clients'][$i] ?? null;
+        $client = $this->findXrayClientByIndexOrId($c, $i);
         if (!is_array($client)) {
             return '';
         }
@@ -8704,6 +8775,12 @@ DNS-over-HTTPS with IP:
             [
                 'text'          => $this->i18n('delete'),
                 'callback_data' => "/delxr $i",
+            ],
+        ];
+        $data[] = [
+            [
+                'text'          => $this->i18n('client ikev2 profile'),
+                'callback_data' => "/clientIkev2Xr $i",
             ],
         ];
         $data[] = [
@@ -12574,19 +12651,34 @@ DNS-over-HTTPS with IP:
         if ($this->isChildNode()) {
             return;
         }
-        $data = [
+        $file = __DIR__ . '/config.php';
+        require $file;
+        $admins = [];
+        foreach ((array) ($c['admin'] ?? []) as $admin) {
+            $admin = (int) $admin;
+            if ($admin > 0) {
+                $admins[] = $admin;
+            }
+        }
+
+        // Default scope — regular users get /update.
+        $this->request('setMyCommands', json_encode([
             'commands' => [
-                [
-                    'command'     => 'update',
-                    'description' => '...',
+                ['command' => 'update', 'description' => '...'],
+                ['command' => 'id', 'description' => 'your id telegram'],
+            ],
+        ]), 1);
+
+        // Admin scope — the owner sees /menu instead of /update.
+        foreach ($admins as $adminId) {
+            $this->request('setMyCommands', json_encode([
+                'commands' => [
+                    ['command' => 'menu', 'description' => '...'],
+                    ['command' => 'id', 'description' => 'your id telegram'],
                 ],
-                [
-                    'command'     => 'id',
-                    'description' => 'your id telegram',
-                ],
-            ]
-        ];
-        var_dump($this->request('setMyCommands', json_encode($data), 1));
+                'scope' => ['type' => 'chat', 'chat_id' => $adminId],
+            ]), 1);
+        }
     }
 
     public function send($chat, $text, ?int $to = 0, $button = false, $reply = false, $mode = 'HTML', $disable_notification = false)

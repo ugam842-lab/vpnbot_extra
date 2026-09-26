@@ -179,9 +179,10 @@ trait NodeTrait
     foreach ($local as $key => $value) {
       $merged[$key] = $value;
     }
-    if (($merged['node_role'] ?? '') !== 'child') {
-      $merged['node_role'] = 'child';
-    }
+    // node_role is a local key (see getNodeSyncPacLocalKeys): the incoming
+    // sync must not fling this node into 'child'. Role is assigned only at
+    // join time (join_node.sh) / repair — never by an incoming sync, which
+    // would otherwise roll an established parent back to child.
 
     return $merged;
   }
