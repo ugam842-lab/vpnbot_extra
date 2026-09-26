@@ -132,7 +132,7 @@ sudo IKEV2_SERVER_IP=<твой-IP> bash scripts/setup-ikev2.sh
 
 Скрипт идемпотентен: ставит strongSwan (apt/dnf), генерирует CA + серверный сертификат (если их нет), пишет статичный `/etc/swanctl/conf.d/ikev2.conf` (соединение + пул `10.99.0.0/24`), кладёт копию CA в `config/ikev2-ca.pem` (php-контейнер видит её как `/config/ikev2-ca.pem`) и запускает `strongswan-swanctl.service`. Приватный ключ CA и EAP-пароли **не** попадают в git — они хранятся на хосте.
 
-**Дальше мастер — включить транспорт.** В меню транспорта подписки включи флаг `ikev2` (глобально или per-subscription). Бот начнёт генерировать EAP-пароль пользователя в `config/ikev2-eap.conf` и перезагружать strongSwan по SSH. Для этого php-контейнер должен уметь ходить на хост по SSH: добавь публичный ключ контейнера (`/ssh/key.pub`) в `authorized_keys` root'а на хосте. Пока флаг выключен — кнопки профиля не показываются.
+**Дальше мастер — включить транспорт.** В меню транспорта нажми тумблер **IKEv2** (глобально для всех, либо per-user в карточке пользователя). Бот начнёт генерировать EAP-пароль пользователя в `config/ikev2-eap.conf` и перезагружать strongSwan по SSH. Для этого php-контейнер должен уметь ходить на хост по SSH: добавь публичный ключ контейнера (`/ssh/key.pub`) в `authorized_keys` root'а на хосте. Пока флаг выключен — кнопки профиля не показываются.
 
 **Для пользователя — как подключиться.** В боте появится кнопка «Профиль IKEv2», где выдаются логин, пароль, сервер и два файла профиля. По всем ОС:
 
@@ -285,7 +285,7 @@ sudo IKEV2_SERVER_IP=<your-IP> bash scripts/setup-ikev2.sh
 
 The script is idempotent: installs strongSwan (apt/dnf), generates a CA + server cert (if missing), writes a static `/etc/swanctl/conf.d/ikev2.conf` (connection + `10.99.0.0/24` pool), copies the CA to `config/ikev2-ca.pem` (the php container sees it as `/config/ikev2-ca.pem`) and starts `strongswan-swanctl.service`. The CA private key and EAP passwords are **not** committed — they live on the host.
 
-**Admin — enable the transport.** In the subscription transport menu, enable the `ikev2` flag (global or per-subscription). The bot then generates the user's EAP password into `config/ikev2-eap.conf` and reloads strongSwan over SSH. For this the php container must reach the host over SSH: add the container's public key (`/ssh/key.pub`) to root's `authorized_keys` on the host. While the flag is off, the profile buttons are hidden.
+**Admin — enable the transport.** In the transport menu, tap the **IKEv2** toggle (global for everyone, or per-user in the user's card). The bot then generates the user's EAP password into `config/ikev2-eap.conf` and reloads strongSwan over SSH. For this the php container must reach the host over SSH: add the container's public key (`/ssh/key.pub`) to root's `authorized_keys` on the host. While the flag is off, the profile buttons are hidden.
 
 **User — how to connect.** A "IKEv2 profile" button appears in the bot, giving the login, password, server and two profile files. Across OSes:
 
