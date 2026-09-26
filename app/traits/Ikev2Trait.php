@@ -417,33 +417,73 @@ trait Ikev2Trait
         $text   = $linePad;
         if (!empty($profile['error'])) {
             $text[] = $this->i18n('client ikev2 unavailable');
-        } else {
-            $text[] = '';
-            $text[] = '<b>' . $this->i18n('client ikev2 credentials') . '</b>: <code>' . htmlspecialchars($cred['username'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</code>';
-            $text[] = '<b>' . $this->i18n('client ikev2 password') . '</b>: <code>' . htmlspecialchars($cred['password'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</code>';
-            $text[] = '<b>' . $this->i18n('client ikev2 server') . '</b>: <code>' . htmlspecialchars($this->getIkev2Host(), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</code>';
+            $this->replyMenu(
+                $this->input['chat'],
+                (int) ($this->input['message_id'] ?? 0),
+                implode("\n", array_filter($text)),
+                [[[
+                    'text'          => $this->i18n('back'),
+                    'callback_data' => "/menu client {$client}_{$page}",
+                ]]],
+            );
+
+            return;
         }
 
+        $chat     = $this->input['chat'];
+        $loginVal = '<code>' . htmlspecialchars($cred['username'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</code>';
+        $passVal  = '<code>' . htmlspecialchars($cred['password'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</code>';
+        $srvVal   = '<code>' . htmlspecialchars($this->getIkev2Host(), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</code>';
+
+        // Профиль + имя — первым сообщением, с кнопкой «назад».
         $this->replyMenu(
-            $this->input['chat'],
+            $chat,
             (int) ($this->input['message_id'] ?? 0),
-            implode("\n", array_filter($text)),
+            implode("\n", array_filter($linePad)),
             [[[
                 'text'          => $this->i18n('back'),
                 'callback_data' => "/menu client {$client}_{$page}",
             ]]],
         );
+
+        // Данные парами: заголовок отдельно, значение отдельно.
+        $this->send($chat, '<b>' . $this->i18n('client ikev2 credentials') . ':</b>', 0);
+        $this->send($chat, $loginVal, 0);
+        $this->send($chat, '<b>' . $this->i18n('client ikev2 password') . ':</b>', 0);
+        $this->send($chat, $passVal, 0);
+        $this->send($chat, '<b>' . $this->i18n('client ikev2 server') . ':</b>', 0);
+        $this->send($chat, $srvVal, 0);
+
+        // Файлы — после текстовых данных.
+        if ($profile['sswan'] !== '') {
+            $this->upload(preg_replace('~\s+~', '_', $name) . '.sswan', $profile['sswan']);
+        }
+        if ($profile['mobileconfig'] !== '') {
+            $this->upload(preg_replace('~\s+~', '_', $name) . '.mobileconfig', $profile['mobileconfig']);
+        }
     }
 
     /**
      * Stable identity key for a VLESS/xray client in the bot's owner client list
-     * (the «Menu -> xray -> email» view, userXr). Prefer the client uuid (`id`);
-     * fall back to a hash of the email and index so a reshuffle does not orphan
-     * credentials. Distinct namespace from the WireGuard path (ikev2ClientKey) so
-     * the same human never collides across transports.
+     * (the «Menu -> xray -> email» view, userXr).
+     *
+     * Keyed by the subscription id (the same anchor the user device portal uses),
+     * so a subscription's VLESS card and its portal yield ONE credential set —
+     * no "password changes each click" across surfaces. Falls back to the client
+     * uuid when a client predates subscription_id anchoring, and to a hash of the
+     * email+index on a reshuffle. The `xr_` namespace only applies to uuid/email
+     * fallbacks, never to the subscription id, so it never collides with the
+     * WireGuard path (ikev2ClientKey) or the portal key.
      */
     protected function ikev2XrKey(array $client, int $index): string
     {
+        $subId = trim((string) $this->getClientSubscriptionId($client));
+        if ($subId !== '') {
+            // subscription_id is already the plain portal key (portal path uses the
+            // raw id, not a hashed form) — return it verbatim so the two converge.
+            return $subId;
+        }
+
         $id = trim((string) ($client['id'] ?? ''));
         if ($id !== '') {
             return 'xr_' . hash('sha256', $id);
@@ -497,33 +537,52 @@ trait Ikev2Trait
 
         $profile = $this->getIkev2Profile($cred, $name);
 
-        if (empty($profile['error'])) {
-            if ($profile['sswan'] !== '') {
-                $this->upload(preg_replace('~\s+~', '_', $name) . '.sswan', $profile['sswan']);
-            }
-            if ($profile['mobileconfig'] !== '') {
-                $this->upload(preg_replace('~\s+~', '_', $name) . '.mobileconfig', $profile['mobileconfig']);
-            }
-        }
-
         $text = $linePad;
         if (!empty($profile['error'])) {
             $text[] = $this->i18n('client ikev2 unavailable');
-        } else {
-            $text[] = '';
-            $text[] = '<b>' . $this->i18n('client ikev2 credentials') . '</b>: <code>' . htmlspecialchars($cred['username'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</code>';
-            $text[] = '<b>' . $this->i18n('client ikev2 password') . '</b>: <code>' . htmlspecialchars($cred['password'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</code>';
-            $text[] = '<b>' . $this->i18n('client ikev2 server') . '</b>: <code>' . htmlspecialchars($this->getIkev2Host(), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</code>';
+            $this->replyMenu(
+                $this->input['chat'],
+                (int) ($this->input['message_id'] ?? 0),
+                implode("\n", array_filter($text)),
+                [[[
+                    'text'          => $this->i18n('back'),
+                    'callback_data' => "/userXr {$i}",
+                ]]],
+            );
+
+            return;
         }
 
+        $chat     = $this->input['chat'];
+        $loginVal = '<code>' . htmlspecialchars($cred['username'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</code>';
+        $passVal  = '<code>' . htmlspecialchars($cred['password'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</code>';
+        $srvVal   = '<code>' . htmlspecialchars($this->getIkev2Host(), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</code>';
+
+        // Профиль + имя — первым сообщением, с кнопкой «назад».
         $this->replyMenu(
-            $this->input['chat'],
+            $chat,
             (int) ($this->input['message_id'] ?? 0),
-            implode("\n", array_filter($text)),
+            implode("\n", array_filter($linePad)),
             [[[
                 'text'          => $this->i18n('back'),
                 'callback_data' => "/userXr {$i}",
             ]]],
         );
+
+        // Данные парами: заголовок отдельно, значение отдельно.
+        $this->send($chat, '<b>' . $this->i18n('client ikev2 credentials') . ':</b>', 0);
+        $this->send($chat, $loginVal, 0);
+        $this->send($chat, '<b>' . $this->i18n('client ikev2 password') . ':</b>', 0);
+        $this->send($chat, $passVal, 0);
+        $this->send($chat, '<b>' . $this->i18n('client ikev2 server') . ':</b>', 0);
+        $this->send($chat, $srvVal, 0);
+
+        // Файлы — после текстовых данных.
+        if ($profile['sswan'] !== '') {
+            $this->upload(preg_replace('~\s+~', '_', $name) . '.sswan', $profile['sswan']);
+        }
+        if ($profile['mobileconfig'] !== '') {
+            $this->upload(preg_replace('~\s+~', '_', $name) . '.mobileconfig', $profile['mobileconfig']);
+        }
     }
 }
