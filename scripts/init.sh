@@ -98,3 +98,8 @@ bash "$APP_DIR/scripts/bootstrap_config.sh"
 echo "[vpnbot] Starting/Updating containers..."
 make u
 echo "[vpnbot] Done."
+echo "[vpnbot] Next steps:"
+echo "  1. Open Telegram and send /start to your bot to load the main menu."
+echo "  2. Initial setup (domain, SSL, access grants) is in the bot's config menu."
+echo "  3. Enable autostart after server reboot (once):"
+echo "     cd ${APP_DIR} && bash scripts/install_as_service.sh"

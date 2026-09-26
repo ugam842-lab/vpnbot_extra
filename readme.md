@@ -36,6 +36,8 @@ wget -O- https://raw.githubusercontent.com/ugam842-lab/vpnbot_extra/master/scrip
 
 При первом запуске создаются `.env` (из `env.defaults`), `config/` (из `config-templates/`) и `override.env`.
 
+**Куда дальше после ввода токена.** Установка поднимает контейнеры и включает вебхук на родителе (`make u`, затем `/start` бота в Telegram). Проверьте, что бот откликается в чате. Основное меню бота — команда `/start`; первичная настройка (домен, SSL, выдача доступов) — через меню бота `config`. Автозапуск после перезагрузки сервера включите один раз: `bash scripts/install_as_service.sh` (создаёт и активирует `vpnbot.service`).
+
 ### Обновление (без токена бота)
 
 ```shell
@@ -170,6 +172,8 @@ Telegram bot for managing a VPN server directly from Telegram.
 ```shell
 wget -O- https://raw.githubusercontent.com/ugam842-lab/vpnbot_extra/master/scripts/init.sh | sh -s YOUR_TELEGRAM_BOT_KEY master
 ```
+
+**Next steps after the token.** Install brings up the containers and sets the webhook on the parent (`make u`, then `/start` the bot in Telegram). Confirm the bot answers in chat; primary setup (domain, SSL, access grants) is under the bot's `config` menu. Enable autostart across server reboots once: `bash scripts/install_as_service.sh` (creates and activates `vpnbot.service`).
 
 ### Upgrade (without bot token)
 
