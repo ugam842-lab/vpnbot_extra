@@ -14,6 +14,11 @@ trait NodeTrait
     return !$this->isChildNode();
   }
 
+  public function isStandaloneNode(): bool
+  {
+    return ($this->getPacConf()['node_role'] ?? 'parent') === 'standalone';
+  }
+
   /**
    * @return list<array{id: string, name: string, domain: string, enabled: bool, registered: bool, last_sync: int, last_ok: int, last_error: string}>
    */
@@ -1050,8 +1055,12 @@ trait NodeTrait
     ];
     $data[] = [
       [
-        'text'          => 'delete',
+        'text'          => $this->i18n('nodes_detach'),
         'callback_data' => "/nodeDelete $nodeId $page",
+      ],
+      [
+        'text'          => $this->i18n('nodes_purge'),
+        'callback_data' => "/nodePurgeConfirm $nodeId $page",
       ],
     ];
     $data[] = [
@@ -1114,10 +1123,64 @@ trait NodeTrait
 
   public function nodeDelete(string $nodeId, int $page = 0)
   {
+    // «Удалить» = отвязать ноду (detach), НЕ уничтожить безвозвратно. Нода
+    // снимается с регистрации и выключается, но остаётся в child_nodes со
+    // своим token — её можно вернуть той же командой «добавить/подключить».
+    // Полное удаление (с потерей token) — отдельная команда nodePurge.
     $pac = $this->getPacConf();
+    if (empty($pac['child_nodes'][$nodeId]) || !is_array($pac['child_nodes'][$nodeId])) {
+      $this->nodes($page);
+      return;
+    }
+    $pac['child_nodes'][$nodeId]['registered'] = false;
+    $pac['child_nodes'][$nodeId]['enabled']    = false;
+    $pac['child_nodes'][$nodeId]['detached_at'] = time();
+    $this->setPacConf($pac);
+    $this->nodeView($nodeId, $page);
+  }
+
+  public function nodePurge(string $nodeId, int $page = 0)
+  {
+    // Необратимое удаление ноды (вместе с token). Вызывается только явной
+    // командой «удалить навсегда» после подтверждения в nodePurgeConfirm.
+    $pac = $this->getPacConf();
+    if (empty($pac['child_nodes'][$nodeId]) || !is_array($pac['child_nodes'][$nodeId])) {
+      $this->nodes($page);
+      return;
+    }
     unset($pac['child_nodes'][$nodeId]);
     $this->setPacConf($pac);
     $this->nodes($page);
+  }
+
+  public function nodePurgeConfirm(string $nodeId, int $page = 0)
+  {
+    $pac = $this->getPacConf();
+    $node = $pac['child_nodes'][$nodeId] ?? null;
+    if (!is_array($node)) {
+      $this->nodes($page);
+      return;
+    }
+    $name = trim((string) ($node['name'] ?? $nodeId));
+    $text[] = 'Menu -> ' . $this->i18n('nodes') . ' -> ' . $name;
+    $text[] = $this->i18n('nodes_purge_confirm');
+    $data[] = [
+      [
+        'text'          => $this->i18n('nodes_purge_yes'),
+        'callback_data' => "/nodePurge $nodeId $page",
+      ],
+      [
+        'text'          => $this->i18n('back'),
+        'callback_data' => "/nodeView $nodeId $page",
+      ],
+    ];
+    $body = implode("\n", $text);
+    $this->replyMenu(
+      $this->input['chat'],
+      (int) ($this->input['message_id'] ?? 0),
+      $body,
+      $data,
+    );
   }
 
   public function nodeSyncAll()

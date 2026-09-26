@@ -924,6 +924,14 @@ class Bot
                 $this->nodeDelete($m[1], (int) ($m[2] ?? 0));
                 break;
 
+            case preg_match('~^/nodePurge (\S+)(?: (\d+))?$~', $this->input['callback'], $m):
+                $this->nodePurge($m[1], (int) ($m[2] ?? 0));
+                break;
+
+            case preg_match('~^/nodePurgeConfirm (\S+)(?: (\d+))?$~', $this->input['callback'], $m):
+                $this->nodePurgeConfirm($m[1], (int) ($m[2] ?? 0));
+                break;
+
             case preg_match('~^/nodeSyncAll$~', $this->input['callback']):
                 $this->nodeSyncAll();
                 break;

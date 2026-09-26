@@ -1,3 +1,8 @@
+26.09.2026 v3.0.1-ugam
+- роль standalone: независимая резервная нода (свой webhook, не зависит от parent)
+- удаление ноды → отвязать (detach), необратимый снос вынесен в nodePurge с подтверждением
+- донат-страница (donate.html, toncoin.png) удалена из форка
+
 10.03.2026 v3.0.0-trimx
 - урезанное меню: только VLESS, AWG/WG1, AdGuard, MTProto, Hysteria, PAC, config
 - подписки только Mihomo/Clash (?t=cl) + runtime AWG (?t=wg)
