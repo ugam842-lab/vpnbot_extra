@@ -753,6 +753,18 @@ $i = [
         'en' => 'Amnezia/WG link',
         'ru' => 'Ссылка Amnezia/WG',
     ],
+    'user portal issued title' => [
+        'en' => 'Issued to you',
+        'ru' => 'Вам выдано',
+    ],
+    'user portal issued vless' => [
+        'en' => 'VLESS subscription',
+        'ru' => 'подписок VLESS',
+    ],
+    'user portal issued wg' => [
+        'en' => 'Amnezia/WG configs',
+        'ru' => 'конфигов Amnezia/WG',
+    ],
     'user portal protocols' => [
         'en' => 'Protocols',
         'ru' => 'Протоколы',
