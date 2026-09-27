@@ -17,6 +17,7 @@ Telegram-бот для управления VPN-сервером из Telegram.
 - VLESS transport registry (`Reality` / `Websocket` / `XHTTP` flags) + Mihomo/Clash подписки
 - WireGuard / AmneziaWG (только WG1)
 - IKEv2 (strongSwan)
+- L2TP/IPsec (IKEv1 + XAuth + PSK)
 - AdGuardHome
 - MTProto
 - Hysteria
@@ -143,6 +144,29 @@ sudo IKEV2_SERVER_IP=<твой-IP> bash scripts/setup-ikev2.sh
 
 IKEv2 удобен как запасной канал: не зависит от VLESS/AWG, стабилен на мобильных сетях и нативно поддерживается iOS/macOS/Windows без стороннего софта.
 
+### L2TP/IPsec (IKEv1) — инструкция
+
+L2TP/IPsec — третий тип подключения, рядом с IKEv2 и отдельно от VLESS/AWG. Тот же strongSwan **нативно на хосте**, но через IKEv1 + XAuth + PSK, а L2TP-туннель терминирует `xl2tpd` (PPP поверх готового IPsec). Смысл — максимальная совместимость: нативный L2TP/IPsec есть «из коробки» почти в любой ОС, включая старые Android/Windows, где IKEv2 ведёт себя капризно.
+
+**Для админа — развернуть на хосте.** Один раз, от root:
+
+```bash
+sudo L2TP_SERVER_IP=<твой-IP> bash scripts/setup-ikev1-l2tp.sh
+```
+
+Скрипт идемпотентен: ставит strongSwan (apt/dnf) и `xl2tpd`, пишет статичный `/etc/swanctl/conf.d/ikev1.conf` (соединение IKEv1, раунд 1 — PSK, XAuth во втором раунде), конфиг `/etc/xl2tpd/xl2tpd.conf` + `/etc/ppp/options.xl2tpd` и включает сервисы `strongswan-swanctl` и `xl2tpd`. Пул адресов `10.98.1.10–10.98.1.200`, локальный адрес `10.98.1.1`. PSK и XAuth-пароли в скрипт **не** зашиты — их генерирует бот в `config/l2tp-secrets.conf` и перезагружает swanctl по SSH (тот же путь, что у `ikev2-eap.conf`), так что php-контейнеру нужен доступ на хост по SSH — добавь ключ `/ssh/key.pub` в `authorized_keys` root'а.
+
+**Дальше мастер — включить транспорт.** В меню транспорта нажми тумблер **L2TP** (глобально или per-user в карточке пользователя). Флаг `l2tp` независим от `ikev2` — можно держать оба. В главном меню появляются две кнопки профилей (`iprofile ikev2` и `l2tp`); нажатие ведёт к выбору клиента и выдаёт профиль под этого клиента. Пока флаг выключен — кнопки не показываются.
+
+**Для пользователя — как подключиться.** Кнопка «Профиль L2TP» выдаёт сервер, логин, пароль и PSK, плюс два файла профиля:
+
+- **Android** — встроенный L2TP/IPsec (Настройки → VPN), либо приложение **strongSwan**. Импортируй `.sswan`, введи логин/пароль/PSK, подключись.
+- **iOS / macOS** — нативный L2TP/IPsec. Открой `.mobileconfig` (`VPNType=L2TP`), подтверди установку профиля, введи пароль и PSK.
+- **Windows** — нативный клиент: «Параметры → Сеть → VPN → Добавить VPN-подключение», тип L2TP/IPsec, введи сервер/логин/пароль и PSK.
+- **Linux** — NetworkManager (`nmcli` с L2TP-плагином) или `xl2tpd` + strongSwan с конфигом XAuth+PSK.
+
+**Технические детали (по коммитам).** Соединение `ikev1-child` работает в режиме `transport` с динамическим трафиком UDP/1701 через SA (`local_ts`/`remote_ts` = `dynamic[17/1701]`); `auth=psk` в `local`/`remote`, XAuth вынесен в `local2`. Повторный `swanctl --load-all` из скрипта убран — он убивал юнит при ненулевом exit-коде.
+
 ### Roadmap (v3.x)
 
 - Модульность `bot.php`: HWID вынесен в `HwidTrait` (~1800 строк)
@@ -182,6 +206,7 @@ Telegram bot for managing a VPN server directly from Telegram.
 - VLESS transport registry (`Reality` / `Websocket` / `XHTTP` flags) + Mihomo/Clash subscriptions
 - WireGuard / AmneziaWG (WG1 only)
 - IKEv2 (strongSwan)
+- L2TP/IPsec (IKEv1 + XAuth + PSK)
 - AdGuardHome
 - MTProto
 - Hysteria
@@ -269,6 +294,7 @@ Add:
 - **Device deletion fix** in the portal.
 - **AmneziaWG 3.0** on the server.
 - **IKEv2 (strongSwan):** client profile via the `ikev2` transport flag (global + per-subscription override), a "client ikev2 profile" button in the output; host resolved from `pac['ikev2_host']` → `pac['domain']` → instance IP.
+- **L2TP/IPsec (IKEv1 + XAuth + PSK):** a second native-IPsec neighbor alongside IKEv2, via the independent `l2tp` transport flag; a "client l2tp profile" button, `strongSwan IKEv1 + xl2tpd` setup script, and client profile files (`.sswan` L2TP + `.mobileconfig` `VPNType=L2TP`).
 - **Node stability** (fix 2026-09-26): incoming node-sync no longer forces the local `node_role` to `child` — the role is kept as a local key, so the parent can't relapse and the webhook can't return 403.
 - **User-portal `/update`** routes through the portal (no more "auth denied"); a non-admin without a bound session is no longer blocked.
 - **User-portal not-modified guard:** a repeated `/update` no longer duplicates the menu (genuine edit errors still fall back to `send`).
@@ -295,6 +321,29 @@ The script is idempotent: installs strongSwan (apt/dnf), generates a CA + server
 - **Linux** — native **strongSwan** (swanctl or ipsec) with an EAP-MSCHAPv2 config, or NetworkManager (`nmcli` with the `network-manager-strongswan` plugin).
 
 IKEv2 is a useful fallback channel: independent of VLESS/AWG, stable on mobile networks, and natively supported by iOS/macOS/Windows without third-party software.
+
+### L2TP/IPsec (IKEv1) — setup
+
+L2TP/IPsec is a third connection method, alongside IKEv2 and separate from VLESS/AWG. The same strongSwan **natively on the host**, but over IKEv1 + XAuth + PSK, with the L2TP tunnel terminated by `xl2tpd` (PPP over the established IPsec SA). The point is maximum compatibility: native L2TP/IPsec ships out of the box on almost any OS, including older Android/Windows where IKEv2 is finicky.
+
+**Admin — deploy on the host.** Once, as root:
+
+```bash
+sudo L2TP_SERVER_IP=<your-IP> bash scripts/setup-ikev1-l2tp.sh
+```
+
+The script is idempotent: installs strongSwan (apt/dnf) and `xl2tpd`, writes a static `/etc/swanctl/conf.d/ikev1.conf` (IKEv1 connection, round 1 — PSK, XAuth in round 2), `/etc/xl2tpd/xl2tpd.conf` + `/etc/ppp/options.xl2tpd`, and enables `strongswan-swanctl` and `xl2tpd`. Address pool `10.98.1.10–10.98.1.200`, local address `10.98.1.1`. The PSK and XAuth passwords are **not** baked into the script — the bot generates them into `config/l2tp-secrets.conf` and reloads swanctl over SSH (the same path as `ikev2-eap.conf`), so the php container needs SSH access to the host — add `/ssh/key.pub` to root's `authorized_keys`.
+
+**Admin — enable the transport.** In the transport menu, tap the **L2TP** toggle (global or per-user in the user's card). The `l2tp` flag is independent of `ikev2` — both can be on. Two profile buttons appear in the main menu (`iprofile ikev2` and `l2tp`); tapping one leads to client selection and issues the profile for that client. While the flag is off, the buttons are hidden.
+
+**User — how to connect.** The "L2TP profile" button gives the server, login, password and PSK, plus two profile files:
+
+- **Android** — built-in L2TP/IPsec (Settings → VPN), or the **strongSwan** app. Import the `.sswan`, enter login/password/PSK, connect.
+- **iOS / macOS** — native L2TP/IPsec. Open the `.mobileconfig` (`VPNType=L2TP`), confirm the profile install, enter the password and PSK.
+- **Windows** — native client: "Settings → Network → VPN → Add a VPN connection", type L2TP/IPsec, enter server/login/password and PSK.
+- **Linux** — NetworkManager (`nmcli` with an L2TP plugin) or `xl2tpd` + strongSwan with an XAuth+PSK config.
+
+**Implementation notes (per commits).** The `ikev1-child` connection runs in `transport` mode with dynamic UDP/1701 traffic through the SA (`local_ts`/`remote_ts` = `dynamic[17/1701]`); `auth=psk` on `local`/`remote`, XAuth moved to `local2`. The redundant `swanctl --load-all` was removed from the script — it killed the unit on a non-zero exit.
 
 ### Roadmap (v3.x)
 
