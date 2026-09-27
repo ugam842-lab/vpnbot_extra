@@ -416,6 +416,11 @@ trait UserPortalTrait
      * Normalize a user_portal_bindings value to the v2 record shape.
      * Accepts a legacy bare subscription-id string, an existing v2 array, or
      * nothing — so legacy data keeps resolving without a migration pass.
+     *
+     * v3 adds identity + first-seen fields for the people-directory: a user who
+     * pressed "Start" but has no subscription yet still gets a record, with an
+     * empty subscription_id and `first_seen_at`/`username`/`name` populated, so
+     * they show up in the list before any config is bound to them.
      */
     public static function normalizeUserPortalBinding($value): array
     {
@@ -424,6 +429,9 @@ trait UserPortalTrait
                 'subscription_id' => (string) ($value['subscription_id'] ?? ''),
                 'granted_at'      => (int) ($value['granted_at'] ?? 0),
                 'activated'       => !empty($value['activated']),
+                'first_seen_at'   => (int) ($value['first_seen_at'] ?? 0),
+                'username'        => (string) ($value['username'] ?? ''),
+                'name'            => (string) ($value['name'] ?? ''),
             ];
         }
         if (is_string($value) && $value !== '') {
@@ -431,6 +439,9 @@ trait UserPortalTrait
                 'subscription_id' => $value,
                 'granted_at'      => 0,
                 'activated'       => false,
+                'first_seen_at'   => 0,
+                'username'        => '',
+                'name'            => '',
             ];
         }
 
@@ -438,6 +449,9 @@ trait UserPortalTrait
             'subscription_id' => '',
             'granted_at'      => 0,
             'activated'       => false,
+            'first_seen_at'   => 0,
+            'username'        => '',
+            'name'            => '',
         ];
     }
 
@@ -465,6 +479,38 @@ trait UserPortalTrait
             'subscription_id' => $subscriptionId,
             'granted_at'      => $prev['granted_at'] ?: time(),
             'activated'       => $prev['activated'],
+            'first_seen_at'   => $prev['first_seen_at'] ?: time(),
+            'username'        => $prev['username'],
+            'name'            => $prev['name'],
+        ];
+        $pac['user_portal_bindings'] = $bindings;
+        $this->setPacConf($pac);
+    }
+
+    /**
+     * Record that a non-admin user pressed "Start" / opened the menu, so they
+     * appear in the people-directory even before any subscription is bound.
+     * Idempotent on fields it doesn't own: it only fills identity + first_seen
+     * for an unbound user, never overwrites a subscription once granted.
+     */
+    protected function recordUserPortalSeen(string $telegramId): void
+    {
+        $telegramId = trim($telegramId);
+        if ($telegramId === '' || $this->admin) {
+            return;
+        }
+        $pac = $this->getPacConf();
+        $bindings = $this->getUserPortalBindings();
+        $prev = self::normalizeUserPortalBinding($bindings[$telegramId] ?? null);
+        $username = trim((string) ($this->input['username'] ?? ''));
+        $name = trim((string) ($this->input['first_name'] ?? '') . ' ' . (string) ($this->input['last_name'] ?? ''));
+        $bindings[$telegramId] = [
+            'subscription_id' => $prev['subscription_id'],
+            'granted_at'      => $prev['granted_at'],
+            'activated'       => $prev['activated'],
+            'first_seen_at'   => $prev['first_seen_at'] ?: time(),
+            'username'        => $username !== '' ? $username : $prev['username'],
+            'name'            => $name !== '' ? $name : $prev['name'],
         ];
         $pac['user_portal_bindings'] = $bindings;
         $this->setPacConf($pac);
@@ -479,10 +525,10 @@ trait UserPortalTrait
         $records = [];
         foreach ($this->getUserPortalBindings() as $telegramId => $value) {
             $record = self::normalizeUserPortalBinding($value);
-            if ($record['subscription_id'] !== '') {
-                $record['telegram_id'] = (string) $telegramId;
-                $records[(string) $telegramId] = $record;
-            }
+            // v3: keep unbound (seen-only) records too — the directory lists every
+            // person who pressed Start, not only those with a subscription.
+            $record['telegram_id'] = (string) $telegramId;
+            $records[(string) $telegramId] = $record;
         }
 
         return $records;
@@ -524,6 +570,108 @@ trait UserPortalTrait
             }
         }
         return $ids;
+    }
+
+    /**
+     * The people-directory: every person who pressed Start (bound OR seen-unbound)
+     * plus every client that already owns a VLESS subscription (pulled in from
+     * xray.json so they aren't duplicated), deduped by telegram_id and by
+     * subscription_id.
+     *
+     * Returns a list of rows:
+     *   telegram_id   — TG id when known, else '' for sub-only owners
+     *   subscription_id — '' when nothing bound yet
+     *   username, name, first_seen_at, granted_at, activated
+     *   index         — xray index when the owner has a VLESS client, else null
+     */
+    protected function getUserPortalDirectory(): array
+    {
+        // 1. Existing bindings/seen records, keyed by telegram id.
+        $byTg = [];
+        foreach ($this->getUserPortalBindings() as $telegramId => $value) {
+            $rec = self::normalizeUserPortalBinding($value);
+            $rec['telegram_id'] = (string) $telegramId;
+            $byTg[(string) $telegramId] = $rec;
+        }
+
+        // 2. Pull in existing VLESS owners (subscription holders) not already bound.
+        $xr = $this->getXray();
+        foreach ($this->forEachXrayClient($xr) as $entry) {
+            $v = $entry['client'];
+            if (!empty($v['device_parent_id'])) {
+                continue; // устройство, не владелец
+            }
+            if (!empty($v['off'])) {
+                continue;
+            }
+            $subscriptionId = $this->getClientSubscriptionId($v);
+            if ($subscriptionId === '') {
+                continue;
+            }
+            // Skip if already represented by a binding with the same subscription.
+            $already = false;
+            foreach ($byTg as $rec) {
+                if ($rec['subscription_id'] === $subscriptionId) {
+                    $already = true;
+                    break;
+                }
+            }
+            if ($already) {
+                continue;
+            }
+            // Owner not yet in the directory: represent them under their xray index.
+            $rowKey = 'sub:' . $subscriptionId;
+            $byTg[$rowKey] = [
+                'subscription_id' => $subscriptionId,
+                'granted_at'      => 0,
+                'activated'       => false,
+                'first_seen_at'   => 0,
+                'username'        => '',
+                'name'            => '',
+                'telegram_id'     => '',
+                'index'           => $entry['index'],
+            ];
+        }
+
+        // 3. Fill xray index for any bound owner that has a VLESS client.
+        foreach ($byTg as $key => &$rec) {
+            if (!empty($rec['subscription_id']) && !array_key_exists('index', $rec)) {
+                $idx = $this->getOwnerXrayClientIndexBySubId($rec['subscription_id']);
+                $rec['index'] = $idx;
+            } elseif (!array_key_exists('index', $rec)) {
+                $rec['index'] = null;
+            }
+        }
+        unset($rec);
+
+        // 4. Stable sort: name (username → name → id) ascending.
+        uasort($byTg, function (array $a, array $b) {
+            return strcasecmp($this->userPortalDisplayName($a), $this->userPortalDisplayName($b));
+        });
+
+        return $byTg;
+    }
+
+    /**
+     * Display name for a directory row: @username, else first+last name, else
+     * the telegram id (or subscription id when no TG id is known).
+     */
+    protected function userPortalDisplayName(array $row): string
+    {
+        $username = trim((string) ($row['username'] ?? ''));
+        if ($username !== '') {
+            return '@' . $username;
+        }
+        $name = trim((string) ($row['name'] ?? ''));
+        if ($name !== '') {
+            return $name;
+        }
+        $tg = trim((string) ($row['telegram_id'] ?? ''));
+        if ($tg !== '') {
+            return $tg;
+        }
+
+        return trim((string) ($row['subscription_id'] ?? ''));
     }
 
     protected function resolveUserPortalGrant(): ?array
@@ -762,6 +910,9 @@ trait UserPortalTrait
 
     public function userPortalMenu()
     {
+        // Записать не-админа в people-directory при первом заходе (/start /menu /update).
+        $this->recordUserPortalSeen((string) ($this->input['from'] ?? ''));
+
         if (preg_match('~^/(?:start|menu|update)$~', (string) ($this->input['message'] ?? ''))) {
             unset($_SESSION['userPortalUi']['message_id']);
         }
@@ -1832,36 +1983,352 @@ trait UserPortalTrait
             $text[] = $flash;
         }
         $text[] = $this->i18n('user portal users title') . ':';
-        $records = $this->getUserPortalRecords();
-        if (empty($records)) {
+        $rows = $this->getUserPortalDirectory();
+        if (empty($rows)) {
             $text[] = $this->i18n('user portal users empty');
         } else {
-            foreach ($records as $tgId => $r) {
+            foreach ($rows as $key => $r) {
                 $status = !empty($r['activated']) ? $this->i18n('user portal activated') : $this->i18n('user portal not activated');
-                $text[] = '· <code>' . htmlspecialchars((string) $tgId, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</code> → <code>' . htmlspecialchars((string) $r['subscription_id'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</code> — ' . $status;
+                $name = $this->userPortalDisplayName($r);
+                $text[] = '· ' . htmlspecialchars($name, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . ' — ' . $status;
             }
         }
-        $data = [[
+        // Один ряд — одна кнопка-человек; grant остаётся списком, revoke уходит в карточку.
+        $data = [];
+        foreach ($rows as $key => $r) {
+            $name = $this->userPortalDisplayName($r);
+            $data[] = [[
+                'text'          => $name,
+                'callback_data' => '/userPortalCard ' . rawurlencode((string) $key),
+            ]];
+        }
+        $data[] = [[
             [
                 'text'          => $this->i18n('user portal grant menu'),
                 'callback_data' => '/userPortalGrantPrompt',
             ],
-            [
-                'text'          => $this->i18n('user portal revoke menu'),
-                'callback_data' => '/userPortalRevokePrompt',
-            ],
-        ], [
-            [
-                'text'          => $this->i18n('user portal issue config'),
-                'callback_data' => '/userPortalIssueConfigPrompt',
-            ],
-        ], [
+        ]];
+        $data[] = [[
             [
                 'text'          => $this->i18n('back'),
                 'callback_data' => '/menu config',
             ],
         ]];
         $this->update($this->input['chat'], $this->input['message_id'], implode("\n", $text), $data);
+    }
+
+    /**
+     * Разрешить ключ карточки (из списка, см. getUserPortalDirectory) обратно
+     * в строку каталога + канонический key. key — это 'sub:<subscription_id>'
+     * для владельца без TG-id, иначе Telegram id.
+     */
+    protected function resolveUserPortalCardRow(string $key): ?array
+    {
+        $dir = $this->getUserPortalDirectory();
+        if (isset($dir[$key])) {
+            return [$key, $dir[$key]];
+        }
+        // Кнопки могут нести tg id напрямую (пустой подписки), либо sub:-
+        foreach ($dir as $k => $row) {
+            if ($k === $key || (string) ($row['telegram_id'] ?? '') === $key || (string) ($row['subscription_id'] ?? '') === $key) {
+                return [$k, $row];
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Карточка человека: имя, подписка/статус, кнопки «Привязать подписку»,
+     * «Выдать VLESS», «Выдать Amnezia/WG», «Отозвать» (revoke — здесь, в карточке).
+     */
+    public function userPortalCard(string $key)
+    {
+        if (!$this->admin) {
+            return;
+        }
+        $key = rawurldecode($key);
+        $resolved = $this->resolveUserPortalCardRow($key);
+        if ($resolved === null) {
+            $this->userPortalSetFlash('⚠️ ' . $this->i18n('user portal grant not found'));
+            $this->userPortalUsers();
+
+            return;
+        }
+        [$canonicalKey, $row] = $resolved;
+        $name = $this->userPortalDisplayName($row);
+        $subId = (string) ($row['subscription_id'] ?? '');
+        $tgId = (string) ($row['telegram_id'] ?? '');
+
+        $text = [];
+        $flash = $this->userPortalTakeFlash();
+        if ($flash !== '') {
+            $text[] = $flash;
+        }
+        $text[] = '<b>' . htmlspecialchars($name, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</b>';
+        if ($tgId !== '') {
+            $text[] = $this->i18n('user portal grant placeholder') . ': <code>' . htmlspecialchars($tgId, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</code>';
+        }
+        if ($subId !== '') {
+            $text[] = $this->i18n('user portal grant sub') . ': <code>' . htmlspecialchars($subId, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</code>';
+            $status = !empty($row['activated']) ? $this->i18n('user portal activated') : $this->i18n('user portal not activated');
+            $text[] = $this->i18n('user portal status') . ': ' . $status;
+        } else {
+            $text[] = $this->i18n('user portal grant empty');
+        }
+
+        $data = [[
+            [
+                'text'          => $this->i18n('user portal bind subject'),
+                'callback_data' => '/userPortalCardBind ' . rawurlencode($canonicalKey),
+            ],
+        ], [
+            [
+                'text'          => $this->i18n('user portal issue vless'),
+                'callback_data' => '/userPortalCardVless ' . rawurlencode($canonicalKey),
+            ],
+            [
+                'text'          => $this->i18n('user portal issue wg'),
+                'callback_data' => '/userPortalCardWg ' . rawurlencode($canonicalKey),
+            ],
+        ], [
+            [
+                'text'          => $this->i18n('user portal grant revoke'),
+                'callback_data' => '/userPortalCardRevoke ' . rawurlencode($canonicalKey),
+            ],
+        ], [
+            [
+                'text'          => $this->i18n('back'),
+                'callback_data' => '/userPortalUsers',
+            ],
+        ]];
+        $this->update($this->input['chat'], $this->input['message_id'], implode("\n", $text), $data);
+    }
+
+    /**
+     * «Привязать подписку» — спросить ID подписки и привязать к Telegram id
+     * человека из карточки (или к самому sub-key, если TG нет).
+     */
+    public function userPortalCardBind(string $key)
+    {
+        if (!$this->admin) {
+            return;
+        }
+        $key = rawurldecode($key);
+        $resolved = $this->resolveUserPortalCardRow($key);
+        if ($resolved === null) {
+            $this->userPortalUsers();
+
+            return;
+        }
+        [$canonicalKey, $row] = $resolved;
+        $r = $this->send(
+            $this->input['chat'],
+            $this->i18n('user portal sub prompt'),
+            $this->input['message_id'],
+            reply: $this->i18n('user portal grant sub'),
+        );
+        $_SESSION['reply'][$r['result']['message_id']] = [
+            'start_message'  => $this->input['message_id'],
+            'start_callback' => $this->input['callback_id'],
+            'callback'       => 'userPortalCardBindSave',
+            'args'           => [$canonicalKey],
+        ];
+    }
+
+    public function userPortalCardBindSave($text, string $key)
+    {
+        if (!$this->admin) {
+            return;
+        }
+        $key = rawurldecode($key);
+        $subscriptionId = trim((string) $text);
+        if ($subscriptionId === '' || $this->resolveSubscriptionClient($subscriptionId) === null) {
+            $this->userPortalSetFlash('⚠️ ' . $this->i18n('user portal sub not found'));
+            $this->userPortalCard($key);
+
+            return;
+        }
+        $resolved = $this->resolveUserPortalCardRow($key);
+        $telegramId = '';
+        if ($resolved !== null) {
+            $telegramId = (string) ($resolved[1]['telegram_id'] ?? '');
+            if ($telegramId === '') {
+                // sub:-строка без TG: для существующего владельца просто переходим
+                // на карточку (подписка уже там), перепривязывать нечего.
+                $this->userPortalSetFlash('⚠️ ' . $this->i18n('user portal bind by id'));
+                $this->userPortalCard($key);
+
+                return;
+            }
+        }
+        $this->setUserPortalBinding($telegramId, $subscriptionId);
+        $owner = $this->resolveSubscriptionClient($subscriptionId);
+        if ($owner !== null) {
+            $this->notifySubscriptionUsers($owner['client'], 'appeared');
+        }
+        $this->userPortalSetFlash('✅ ' . $this->i18n('user portal grant ok'));
+        $this->userPortalCard($telegramId);
+    }
+
+    /**
+     * «Отозвать» внутри карточки: убрать привязку (или, для sub-only владельца,
+     * просто убрать человека из каталога). Затем вернуться в список.
+     */
+    public function userPortalCardRevoke(string $key)
+    {
+        if (!$this->admin) {
+            return;
+        }
+        $key = rawurldecode($key);
+        $resolved = $this->resolveUserPortalCardRow($key);
+        if ($resolved === null) {
+            $this->userPortalUsers();
+
+            return;
+        }
+        [$canonicalKey, $row] = $resolved;
+        $telegramId = (string) ($row['telegram_id'] ?? '');
+        if ($telegramId !== '') {
+            $this->removeUserPortalBinding($telegramId);
+        } else {
+            // Владелец без TG-id попал из xray.json; в каталоге он появляется
+            // автоматически, явного binding-записи нет — нечего удалять.
+        }
+        $this->userPortalSetFlash('✅ ' . $this->i18n('user portal revoke ok'));
+        $this->userPortalUsers();
+    }
+
+    /**
+     * «Выдать VLESS» — собрать ссылку VLESS владельца и отправить в его чат(ы)
+     * по subscription_id (всем привязанным TG-id). Файл/QR — прямо в чат.
+     */
+    public function userPortalCardVless(string $key)
+    {
+        if (!$this->admin) {
+            return;
+        }
+        $key = rawurldecode($key);
+        $resolved = $this->resolveUserPortalCardRow($key);
+        if ($resolved === null || (string) ($resolved[1]['subscription_id'] ?? '') === '') {
+            $this->userPortalSetFlash('⚠️ ' . $this->i18n('user portal bind first'));
+            $this->userPortalUsers();
+
+            return;
+        }
+        [$canonicalKey, $row] = $resolved;
+        $subscriptionId = (string) ($row['subscription_id'] ?? '');
+        $owner = $this->resolveSubscriptionClient($subscriptionId);
+        if ($owner === null) {
+            $this->userPortalSetFlash('⚠️ ' . $this->i18n('user portal sub not found'));
+            $this->userPortalCard($key);
+
+            return;
+        }
+        $index = $owner['index'];
+        $link = $this->linkXray($index);
+        if ($link === '') {
+            $this->userPortalSetFlash('⚠️ ' . $this->i18n('user portal vless empty'));
+            $this->userPortalCard($key);
+
+            return;
+        }
+        $this->deliverPortalConfig($subscriptionId, $link, 'vless', $this->userPortalDisplayName($row));
+        $this->userPortalSetFlash('✅ ' . $this->i18n('user portal issue config ok'));
+        $this->userPortalCard($key);
+    }
+
+    /**
+     * «Выдать Amnezia/WG» — выдать/доставить WG-профиль владельцу (его device).
+     * Доставка тем же путём, что и VLESS.
+     */
+    public function userPortalCardWg(string $key)
+    {
+        if (!$this->admin) {
+            return;
+        }
+        $key = rawurldecode($key);
+        $resolved = $this->resolveUserPortalCardRow($key);
+        if ($resolved === null || (string) ($resolved[1]['subscription_id'] ?? '') === '') {
+            $this->userPortalSetFlash('⚠️ ' . $this->i18n('user portal bind first'));
+            $this->userPortalUsers();
+
+            return;
+        }
+        [$canonicalKey, $row] = $resolved;
+        $subscriptionId = (string) ($row['subscription_id'] ?? '');
+        $owner = $this->resolveSubscriptionClient($subscriptionId);
+        if ($owner === null) {
+            $this->userPortalSetFlash('⚠️ ' . $this->i18n('user portal sub not found'));
+            $this->userPortalCard($key);
+
+            return;
+        }
+        if (!$this->isRuntimeDeviceWgEnabled($owner['client'])) {
+            $this->userPortalSetFlash('⚠️ ' . $this->i18n('user portal wg empty'));
+            $this->userPortalCard($key);
+
+            return;
+        }
+        $ownerSubId = $owner['subscription_id'];
+        $devices = $this->getHwidDevicesByUser($ownerSubId);
+        $issued = 0;
+        foreach ($devices as $hwid => $info) {
+            $deviceUuid = (string) ($info['device_uuid'] ?? '');
+            if ($deviceUuid === '') {
+                continue;
+            }
+            $shortLink = $this->getHwidDeviceWgShortLink($ownerSubId, $hwid, $deviceUuid);
+            if ($shortLink !== '') {
+                $issued++;
+                $this->deliverPortalConfig($subscriptionId, preg_replace('~^vpn://~', '', $shortLink), 'wg', $this->getHwidDeviceDisplayName($info));
+            }
+        }
+        if ($issued === 0) {
+            $this->userPortalSetFlash('⚠️ ' . $this->i18n('no devices'));
+        } else {
+            $this->userPortalSetFlash('✅ ' . $this->i18n('user portal issue config ok') . ' (' . $issued . ')');
+        }
+        $this->userPortalCard($key);
+    }
+
+    /**
+     * Доставить конфиг/ссылку во все чаты, привязанные к subscription_id. Если
+     * привязанных чатов нет — оставить в карточке (fallback), не терять выдачу.
+     * kind: 'vless' | 'wg' — влияет на текст и вид файла/QR.
+     */
+    protected function deliverPortalConfig(string $subscriptionId, string $payload, string $kind, string $label): void
+    {
+        $telegramIds = array_unique($this->getUserPortalBindingTelegramIds($subscriptionId));
+        if (empty($telegramIds)) {
+            return;
+        }
+        foreach ($telegramIds as $chatId) {
+            if ($chatId === '') {
+                continue;
+            }
+            try {
+                $this->sendPhoto((int) $chatId, $this->portalConfigQrFile($payload), $this->portalConfigCaption($kind, $label, $payload));
+            } catch (\Throwable $e) {
+                // Не фатально: доставка конфига не должна ломать операцию.
+            }
+        }
+    }
+
+    protected function portalConfigQrFile(string $payload): string
+    {
+        $qrFile = sys_get_temp_dir() . '/qr_portal_' . substr(md5($payload), 0, 12) . '.png';
+        exec("qrencode -t png -o " . escapeshellarg($qrFile) . " " . escapeshellarg($payload));
+        return $qrFile;
+    }
+
+    protected function portalConfigCaption(string $kind, string $label, string $payload): string
+    {
+        if ($kind === 'wg') {
+            return '<b>' . htmlspecialchars($label, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</b> — AmneziaWG' . "\n" . $this->i18n('user portal wg amnezia link') . ':' . "\n" . '<code>' . htmlspecialchars($payload, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</code>';
+        }
+
+        return '<b>' . htmlspecialchars($label, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</b> — VLESS' . "\n" . '<code>' . htmlspecialchars($payload, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</code>';
     }
 
     public function userPortalGrantPrompt()

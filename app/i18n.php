@@ -725,6 +725,34 @@ $i = [
         'en' => 'Access revoked.',
         'ru' => 'Доступ отозван.',
     ],
+    'user portal status' => [
+        'en' => 'Status',
+        'ru' => 'Статус',
+    ],
+    'user portal bind subject' => [
+        'en' => 'Bind subscription',
+        'ru' => 'Привязать подписку',
+    ],
+    'user portal issue vless' => [
+        'en' => 'Issue VLESS',
+        'ru' => 'Выдать VLESS',
+    ],
+    'user portal issue wg' => [
+        'en' => 'Issue Amnezia/WG',
+        'ru' => 'Выдать Amnezia/WG',
+    ],
+    'user portal bind by id' => [
+        'en' => 'This person has no Telegram ID — bind them by Telegram ID from the list instead.',
+        'ru' => 'У этого человека нет Telegram ID — привязывайте по Telegram ID из списка.',
+    ],
+    'user portal issue config ok' => [
+        'en' => 'Config delivered',
+        'ru' => 'Конфиг доставлен',
+    ],
+    'user portal wg amnezia link' => [
+        'en' => 'Amnezia/WG link',
+        'ru' => 'Ссылка Amnezia/WG',
+    ],
     'user portal protocols' => [
         'en' => 'Protocols',
         'ru' => 'Протоколы',
