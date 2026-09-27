@@ -236,6 +236,14 @@ trait UserPortalTrait
             $awgLimit = $this->getAwgLimit($ownerIdx);
             $lines[] = $this->i18n('awg limit') . ': ' . $deviceCount . ' ' . $this->i18n('of') . ' ' . $awgLimit;
         }
+
+        // Явная сводка «сколько выдано»: VLESS-подписка + число Amnezia/WG конфигов.
+        $lines[] = '';
+        $lines[] = $this->i18n('user portal issued title') . ':';
+        $vlessCount = $ownerSubId !== '' ? 1 : 0;
+        $lines[] = '· VLESS — ' . $vlessCount . ' ' . $this->i18n('user portal issued vless');
+        $lines[] = '· Amnezia/WG — ' . $deviceCount . ' ' . $this->i18n('user portal issued wg');
+
         $lines[] = $this->i18n('user portal delete password') . ': ' . $this->i18n(
             $this->hasSubscriptionDevicePassword($client) ? 'user portal password set' : 'user portal password not set'
         );
