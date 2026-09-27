@@ -1946,7 +1946,14 @@ class Bot
             $this->pinAdmin($conf['pinbackup'], 1);
         }
         $conf['pinbackup'] = $this->upload("{$bot}_export_" . date('d_m_Y_H_i') . '.json', $json, $c['admin'][0])['result']['message_id'];
-        $this->setPacConf($conf);
+        // Если pac.json в момент «update» читался как повреждённый/полупрочитанный,
+        // getPacConf() вернул дефолт с флагом _pac_read_error. Не пишем его обратно
+        // — иначе затрём живую конфигурацию заводскими значениями (баг «update
+        // сбрасывает pac.json»). Бэкап ($json) уже сформирован и уйдёт в чат/пин,
+        // так что данные не потеряны — просто не затираем оригинал.
+        if (empty($conf['_pac_read_error'])) {
+            $this->setPacConf($conf);
+        }
         $this->pinAdmin($conf['pinbackup']);
     }
 
@@ -2811,10 +2818,24 @@ class Bot
         if ($this->pacConfCache !== null) {
             return $this->pacConfCache;
         }
-        $raw = json_decode(file_get_contents($this->pac), true);
+        // Прочитать pac.json один раз, до дефолтов. Содержимое файла — источник
+        // правды. Если файл существует и непустой, но json_decode вернул не-массив
+        // (повреждён, обрезан при не-атомарной записи, либо bind-mount ещё не
+        // поднят в момент docker compose up --force-recreate), подменять его
+        // полным заводским дефолтом НЕЛЬЗЯ: любой последующий «read → setPacConf»
+        // (например pinBackup на кнопке «update») затрёт живую конфигурацию тем
+        // самым дефолтом — это и есть баг «update сбрасывает pac.json». Такой
+        // файл помечаем как unreadable: возвращаем дефолт только как in-memory
+        // fallback, НЕ кешируем в pacConfCache и НЕ пишем обратно.
+        $onDisk = @file_get_contents($this->pac);
+        if ($onDisk === false) {
+            $onDisk = '';
+        }
+        $raw = json_decode($onDisk, true);
         if (!is_array($raw)) {
             $raw = [];
         }
+        $readUnreadable = (trim((string) $onDisk) !== '' && $raw === []);
 
         // Defaults to prevent PHP warnings when pac.json is empty/minimal.
         $defaults = [
@@ -2915,6 +2936,16 @@ class Bot
         $conf['domain_main'] = $mainDomain;
         $conf['domain'] = $mainDomain;
         $conf['domain_aliases'] = $this->getDomainAliasesFromConfig($conf);
+
+        // Файл на диске есть и непустой, но не разобрался: не кешируем дефолт и
+        // не даём ему добраться до setPacConf как «текущий конфиг». Конфиг на
+        // диске остаётся нетронутым — источник правды.
+        if ($readUnreadable) {
+            $conf['_pac_read_error'] = true;
+            $this->pacConfCache = null;
+
+            return $conf;
+        }
         $this->pacConfCache = $conf;
 
         return $conf;
@@ -2923,6 +2954,10 @@ class Bot
     public function setPacConf(array $conf)
     {
         $this->invalidatePacConfCache();
+
+        // Внутренний флаг _pac_read_error (getPacConf при нечитаемом pac.json)
+        // не должен попадать на диск и не должен отдаваться как контент.
+        unset($conf['_pac_read_error']);
 
         return file_put_contents($this->pac, json_encode($conf, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
     }
@@ -6998,11 +7033,10 @@ DNS-over-HTTPS with IP:
                     . "&path={$xhPath}"
                     . "&host=$domain"
                     . "&flow="
-                    . "&mode=packet-up"
-                    . "&extra=%7B%22xmux%22%3A%7B%22cMaxReuseTimes%22%3A0%2C%22maxConcurrency%22%3A%2216-32%22%2C%22maxConnections%22%3A0%2C%22hKeepAlivePeriod%22%3A0%2C%22hMaxRequestTimes%22%3A%22600-900%22%2C%22hMaxReusableSecs%22%3A%221800-3000%22%7D%2C%22headers%22%3A%7B%7D%2C%22noGRPCHeader%22%3Afalse%2C%22xPaddingBytes%22%3A%22100-1000%22%2C%22scMaxEachPostBytes%22%3A1000000%2C%22scMinPostsIntervalMs%22%3A30%2C%22scStreamUpServerSecs%22%3A%2220-80%22%7D"
+                    . "&mode=stream-up"
+                    . "&extra=%7B%22xmux%22%3A%7B%22cMaxReuseTimes%22%3A0%2C%22maxConcurrency%22%3A%2216-32%22%2C%22maxConnections%22%3A0%2C%22hKeepAlivePeriod%22%3A0%2C%22hMaxRequestTimes%22%3A%22600-900%22%2C%22hMaxReusableSecs%22%3A%221800-3000%22%7D%2C%22headers%22%3A%7B%7D%2C%22noGRPCHeader%22%3Atrue%2C%22xPaddingBytes%22%3A%22100-1000%22%2C%22scMaxEachPostBytes%22%3A1000000%2C%22scMinPostsIntervalMs%22%3A30%2C%22scStreamUpServerSecs%22%3A%2220-80%22%7D"
                     . "&sni=$domain"
                     . "&fp={$fp}"
-                    . "&alpn=h2"
                     . "#{$email}";
             case 'ws':
             default:
