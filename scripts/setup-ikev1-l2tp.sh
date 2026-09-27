@@ -86,32 +86,39 @@ cat > "$CONF_D/ikev1.conf" <<EOF
 connections {
     ikev1-l2tp {
         version = 1
-        # Нативный L2TP требует legacy (IOS/macOS/Windows): MODP1024 + SHA1.
+        # Нативный L2TP требует legacy (iOS/macOS/Windows): MODP1024 + SHA1.
+        local_addrs = $L2TP_SERVER_IP
+        remote_addrs = %any
         proposals = aes256-sha1-modp1024,aes128-sha1-modp1024
         rekey_time = 4h
         dpd_delay = 25s
         dpd_timeout = 120s
         fragmentation = yes
         unique = never
-        keyingtries = %forever
 
+        # Раунд 1: PSK (сервер и клиент общий ключ).
         local {
-            auth = xauth-psk
+            auth = psk
             id = $L2TP_SERVER_IP
         }
         remote {
             auth = psk
+            id = %any
+        }
+        # Раунд 2: сервер требует XAuth (логин/пароль клиента).
+        local2 {
+            auth = xauth
         }
         children {
             ikev1-child {
-                local_ts = 0.0.0.0/0
                 esp_proposals = aes256-sha1-modp1024,aes128-sha1-modp1024
-                mode = tunnel
+                mode = transport
+                # Только L2TP (UDP/1701) через established IPsec SA.
+                local_ts = dynamic[17/1701]
+                remote_ts = dynamic[17/1701]
                 start_action = none
                 rekey_time = 1h
                 life_time = 90m
-                # L2TP-трафик: UDP/1701 через established IPsec SA.
-                updown = /usr/lib/ipsec/_updown iptables
             }
         }
     }
@@ -165,12 +172,14 @@ fi
 # --- 5. сервисы ---------------------------------------------------------------
 systemctl enable strongswan-swanctl.service 2>/dev/null || \
     systemctl enable strongswan.service 2>/dev/null || true
+# НЕ вызываем swanctl --load-all отдельно: ExecStartPost у systemd-юнита уже нагружает
+# конфиги при старте, а сторонний вызов с ненулевым exit-кодом убивает сервис
+# (systemd трактует провал ExecStartPost как провал всего юнита). Достаточно рестарта.
 systemctl restart strongswan-swanctl.service 2>/dev/null || \
-    systemctl restart strongswan.service 2>/dev/null || true
-swanctl --load-all 2>&1 | sed 's/^/[swanctl] /' || warn "swanctl --load-all вернул ошибку."
+    systemctl restart strongswan.service 2>/dev/null || warn "strongswan не стартанул — глянь systemctl status strongswan."
 
 systemctl enable xl2tpd.service 2>/dev/null || true
 systemctl restart xl2tpd.service 2>/dev/null || warn "xl2tpd не стартанул — глянь systemctl status xl2tpd."
 
-log "L2TP/IPsec готов. Проверка: swanctl --stats; ss -lnup | grep 1701."
+log "L2TP/IPsec готов. Проверка: ss -lnup | grep -E '1701|500|4500'."
 log "SSH для php-контейнера (/ssh/key.pub) — тот же, что у IKEv2; бот сам пишет secrets и reloads."
