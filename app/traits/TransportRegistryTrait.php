@@ -14,6 +14,9 @@ trait TransportRegistryTrait
             // IKEv2 (strongSwan) profile availability, per-subscription. Server-side
             // transport only — not an xray inbound, so it has no port default here.
             'ikev2' => 0,
+            // L2TP/IPsec (нативный «L2TP» на iOS/macOS/Windows) — IKEv1 + XAuth + PSK.
+            // Сосед IKEv2, включается независимо своим флагом.
+            'l2tp' => 0,
         ];
         $legacy = (string) ($conf['transport'] ?? 'Websocket');
         if ($legacy === 'Reality') {

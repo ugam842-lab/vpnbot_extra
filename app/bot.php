@@ -10,6 +10,7 @@ require_once __DIR__ . '/traits/LegacyRemovedTrait.php';
 require_once __DIR__ . '/traits/ClashTemplateTrait.php';
 require_once __DIR__ . '/traits/UserPortalTrait.php';
 require_once __DIR__ . '/traits/Ikev2Trait.php';
+require_once __DIR__ . '/traits/L2tpTrait.php';
 require_once __DIR__ . '/traits/MirrorTrait.php';
 require_once __DIR__ . '/traits/NodeTrait.php';
 require_once __DIR__ . '/traits/LoggingTrait.php';
@@ -27,6 +28,7 @@ class Bot
     use ClashTemplateTrait;
     use UserPortalTrait;
     use Ikev2Trait;
+    use L2tpTrait;
     use MirrorTrait;
     use NodeTrait;
     use LoggingTrait;
@@ -311,6 +313,15 @@ class Bot
                 $this->clientIkev2((int) $m[1], (int) $m[2]);
             case preg_match('~^/clientIkev2Xr (\d+)$~', $this->input['callback'], $m):
                 $this->clientIkev2Xr((int) $m[1]);
+                break;
+            case preg_match('~^/iprofileMenu (ikev2|l2tp)(?: (\d+))?$~', $this->input['callback'], $m):
+                $this->iprofileMenu($m[1], isset($m[2]) ? (int) $m[2] : 0);
+                break;
+            case preg_match('~^/clientL2tp (\d+)_(\d+)$~', $this->input['callback'], $m):
+                $this->clientL2tp((int) $m[1], (int) $m[2]);
+                break;
+            case preg_match('~^/clientL2tpXr (\d+)$~', $this->input['callback'], $m):
+                $this->clientL2tpXr((int) $m[1]);
                 break;
             case preg_match('~^/toggleUserPortal$~', $this->input['callback'], $m):
                 $this->toggleUserPortal();
@@ -5942,6 +5953,18 @@ DNS-over-HTTPS with IP:
                             [
                                 'text'          => $this->i18n('Hysteria'),
                                 'callback_data' => "/menu hy",
+                            ],
+                        ],
+                    ],
+                    [
+                        [
+                            [
+                                'text'          => $this->i18n('iprofile'),
+                                'callback_data' => "/iprofileMenu ikev2",
+                            ],
+                            [
+                                'text'          => $this->i18n('l2tp'),
+                                'callback_data' => "/iprofileMenu l2tp",
                             ],
                         ],
                     ],
