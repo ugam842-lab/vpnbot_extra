@@ -14,6 +14,7 @@ require_once __DIR__ . '/traits/L2tpTrait.php';
 require_once __DIR__ . '/traits/MirrorTrait.php';
 require_once __DIR__ . '/traits/NodeTrait.php';
 require_once __DIR__ . '/traits/LoggingTrait.php';
+require_once __DIR__ . '/traits/CrossIssueTrait.php';
 require_once __DIR__ . '/BackupSchedule.php';
 
 class Bot
@@ -93,6 +94,8 @@ class Bot
             'chat'              => $input['message']['chat']['id'] ?? $input['callback_query']['message']['chat']['id'] ?? $input['channel_post']['chat']['id'] ?? $input['my_chat_member']['chat']['id'],
             'from'              => $input['message']['from']['id'] ?? $input['inline_query']['from']['id'] ?? $input['callback_query']['from']['id'] ?? $input['channel_post']['chat']['id'] ?? $input['my_chat_member']['from']['id'],
             'username'          => $input['message']['from']['username'] ?? $input['inline_query']['from']['username'] ?? $input['callback_query']['from']['username'],
+            'first_name'        => $input['message']['from']['first_name'] ?? $input['inline_query']['from']['first_name'] ?? $input['callback_query']['from']['first_name'],
+            'last_name'         => $input['message']['from']['last_name'] ?? $input['inline_query']['from']['last_name'] ?? $input['callback_query']['from']['last_name'],
             'query'             => $input['inline_query']['query'] ?? '',
             'inlid'             => $input['inline_query']['id'] ?? '',
             'group'             => (isset($input['message']['chat']['type']) && $input['message']['chat']['type'] === 'group'),
@@ -349,6 +352,21 @@ class Bot
                 break;
             case preg_match('~^/userPortalUsers$~', $this->input['callback'], $m):
                 $this->userPortalUsers();
+                break;
+            case preg_match('~^/userPortalCard (.+)$~', $this->input['callback'], $m):
+                $this->userPortalCard($m[1]);
+                break;
+            case preg_match('~^/userPortalCardBind (.+)$~', $this->input['callback'], $m):
+                $this->userPortalCardBind($m[1]);
+                break;
+            case preg_match('~^/userPortalCardVless (.+)$~', $this->input['callback'], $m):
+                $this->userPortalCardVless($m[1]);
+                break;
+            case preg_match('~^/userPortalCardWg (.+)$~', $this->input['callback'], $m):
+                $this->userPortalCardWg($m[1]);
+                break;
+            case preg_match('~^/userPortalCardRevoke (.+)$~', $this->input['callback'], $m):
+                $this->userPortalCardRevoke($m[1]);
                 break;
             case preg_match('~^/userPortalGrantPrompt$~', $this->input['callback'], $m):
                 $this->userPortalGrantPrompt();
@@ -5011,6 +5029,14 @@ DNS-over-HTTPS with IP:
                     ],
                 ];
             }
+            if ($this->isL2tpEnabled($clients[$client])) {
+                $data[] = [
+                    [
+                        'text'          => $this->i18n('client l2tp profile'),
+                        'callback_data' => "/clientL2tp {$client}_{$page}",
+                    ],
+                ];
+            }
 
             // Amnezia/WG: device limit + TG portal, only for subscription-backed
             // profiles (bound via ## owner_sub_id). The limit is `awg_limit` on the
@@ -8302,6 +8328,12 @@ DNS-over-HTTPS with IP:
                 'callback_data' => '/toggleGlobalTransport ikev2',
             ],
         ];
+        $data[] = [
+            [
+                'text'          => 'L2TP: ' . $this->i18n(!empty($globalTransports['l2tp']) ? 'on' : 'off'),
+                'callback_data' => '/toggleGlobalTransport l2tp',
+            ],
+        ];
         if (!empty($globalTransports['reality'])) {
             $row = [
                 [
@@ -8803,6 +8835,10 @@ DNS-over-HTTPS with IP:
                 'text'          => 'IKEv2: ' . $this->i18n(!empty($transportFlags['ikev2']) ? 'on' : 'off'),
                 'callback_data' => "/toggleUserTransport ikev2 $i",
             ],
+            [
+                'text'          => 'L2TP: ' . $this->i18n(!empty($transportFlags['l2tp']) ? 'on' : 'off'),
+                'callback_data' => "/toggleUserTransport l2tp $i",
+            ],
         ];
         $data[] = [
             [
@@ -8846,6 +8882,14 @@ DNS-over-HTTPS with IP:
                 [
                     'text'          => $this->i18n('client ikev2 profile'),
                     'callback_data' => "/clientIkev2Xr $i",
+                ],
+            ];
+        }
+        if ($this->isL2tpEnabled($c)) {
+            $data[] = [
+                [
+                    'text'          => $this->i18n('client l2tp profile'),
+                    'callback_data' => "/clientL2tpXr $i",
                 ],
             ];
         }
@@ -11846,7 +11890,7 @@ DNS-over-HTTPS with IP:
 
     public function toggleGlobalTransport($name)
     {
-        $allowed = ['reality', 'ws', 'xhttp', 'hysteria', 'ikev2'];
+        $allowed = ['reality', 'ws', 'xhttp', 'hysteria', 'ikev2', 'l2tp'];
         if (!in_array($name, $allowed, true)) {
             $this->answer($this->input['callback_id'], 'unknown transport', true);
             return;
@@ -11856,8 +11900,8 @@ DNS-over-HTTPS with IP:
         $pac = $this->normalizeTransportRegistry($pac);
         $pac['transport_registry']['global'][$name] = !empty($pac['transport_registry']['global'][$name]) ? 0 : 1;
         $this->setPacConf($pac);
-        // IKEv2 is a flag, not an xray inbound: no runtime rebuild/reload needed.
-        if ($name !== 'ikev2') {
+        // IKEv2 and L2TP are flags, not xray inbounds: no runtime rebuild/reload needed.
+        if ($name !== 'ikev2' && $name !== 'l2tp') {
             $this->applyTransportRegistryAndRuntime();
         }
         $this->xrayCore();
@@ -11885,7 +11929,7 @@ DNS-over-HTTPS with IP:
 
     public function toggleUserTransport($name, $i)
     {
-        $allowed = ['reality', 'ws', 'xhttp', 'hysteria', 'awg', 'ikev2'];
+        $allowed = ['reality', 'ws', 'xhttp', 'hysteria', 'awg', 'ikev2', 'l2tp'];
         if (!in_array($name, $allowed, true)) {
             $this->answer($this->input['callback_id'], 'unknown transport', true);
             return;
