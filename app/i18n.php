@@ -961,6 +961,50 @@ $i = [
         'en' => 'IKEv2 profile is unavailable. Contact support.',
         'ru' => 'Профиль IKEv2 недоступен. Обратитесь в поддержку.',
     ],
+    'iprofile' => [
+        'en' => 'IPsec profiles',
+        'ru' => 'IPsec-профили',
+    ],
+    'l2tp' => [
+        'en' => 'L2TP',
+        'ru' => 'L2TP',
+    ],
+    'iprofile empty' => [
+        'en' => 'No clients to issue a profile for yet.',
+        'ru' => 'Клиентов для выдачи профиля пока нет.',
+    ],
+    'iprofile pick ikev2' => [
+        'en' => 'Pick a client to issue an IKEv2 profile',
+        'ru' => 'Выбери клиента — выпустим профиль IKEv2',
+    ],
+    'iprofile pick l2tp' => [
+        'en' => 'Pick a client to issue an L2TP profile',
+        'ru' => 'Выбери клиента — выпустим профиль L2TP',
+    ],
+    'client l2tp profile' => [
+        'en' => 'L2TP/IPsec profile',
+        'ru' => 'Профиль L2TP/IPsec',
+    ],
+    'client l2tp credentials' => [
+        'en' => 'Login',
+        'ru' => 'Логин',
+    ],
+    'client l2tp password' => [
+        'en' => 'Password',
+        'ru' => 'Пароль',
+    ],
+    'client l2tp psk' => [
+        'en' => 'Shared key (PSK)',
+        'ru' => 'Общий ключ (PSK)',
+    ],
+    'client l2tp server' => [
+        'en' => 'Server',
+        'ru' => 'Сервер',
+    ],
+    'client l2tp unavailable' => [
+        'en' => 'L2TP/IPsec profile is unavailable. Contact support.',
+        'ru' => 'Профиль L2TP/IPsec недоступен. Обратитесь в поддержку.',
+    ],
     'wg status unavailable' => [
         'en' => 'WireGuard status is unavailable.',
         'ru' => 'Статус WireGuard недоступен.',

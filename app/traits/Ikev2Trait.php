@@ -234,6 +234,24 @@ trait Ikev2Trait
      */
     protected function reloadIkev2(): bool
     {
+        return $this->reloadSwanctl(
+            (string) (getenv('IKEV2_EAP_HOST_SRC') ?: '/root/vpnbot_extra/config/ikev2-eap.conf'),
+            (string) (getenv('IKEV2_EAP_HOST_DST') ?: '/etc/swanctl/conf.d/ikev2-eap.conf')
+        );
+    }
+
+    /**
+     * Copy one bot-written secrets include file onto the host (no symlink — swanctl's
+     * include glob skips those), then `swanctl --load-all`. Shared by IKEv2 (EAP)
+     * and L2TP (PSK+xauth) — same ssh transport, different src/dst pair.
+     *
+     * Uses the php container's ssh key over the host bridge (host.docker.internal).
+     * Purely best-effort: on any failure (missing ssh2 ext, unreachable host, denied
+     * key) we return false silently and the credential still persists — the reload can
+     * be forced later by running `swanctl --load-all` on the host as root.
+     */
+    protected function reloadSwanctl(string $src, string $dst): bool
+    {
         if (!function_exists('ssh2_connect')) {
             return false;
         }
@@ -255,13 +273,10 @@ trait Ikev2Trait
             return false;
         }
 
-        // The secrets file the bot just wrote lives in the config/ bind-mount; on the
-        // host that same file is at /root/vpnbot_extra/config/ikev2-eap.conf. Copy it
+        // The secrets file the bot just wrote lives in the config/ bind-mount; copy it
         // into a REAL file under conf.d (no symlink — swanctl skips those), then reload.
         // Paths are escaped with single quotes; the config path is injected server-side
         // and contains no single quotes.
-        $src = (string) (getenv('IKEV2_EAP_HOST_SRC') ?: '/root/vpnbot_extra/config/ikev2-eap.conf');
-        $dst = (string) (getenv('IKEV2_EAP_HOST_DST') ?: '/etc/swanctl/conf.d/ikev2-eap.conf');
         $cmd = 'cp ' . escapeshellarg($src) . ' ' . escapeshellarg($dst) . ' && swanctl --load-all 2>&1';
 
         $stream = @ssh2_exec($conn, $cmd);
