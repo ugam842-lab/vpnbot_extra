@@ -89,10 +89,17 @@ trait UserPortalTrait
                 return;
             }
             // Edit вернул ошибку. Если это «message is not modified» — меню на
-            // экране уже корректно, повторный send() только задвоит его. Тихо
-            // сохраняем id и выходим, остальное — честный фолбэк в send().
+            // экране уже корректно, повторный send() только задвоит его.
+            // Сохраняем id, даём тост (клик дошёл), и выходим без повторной
+            // отправки. Тост возможен только для inline-клика — для команды-
+            // сообщения /update id заранее сброшен (см. userPortalMenu), поэтому
+            // сюда она не попадает.
             if ($this->isMessageNotModified($r)) {
                 $this->setUserPortalUiMessageId($messageId);
+                $cbId = $this->input['callback_id'] ?? false;
+                if (!empty($cbId)) {
+                    $this->answer($cbId, $this->i18n('user portal up to date'));
+                }
 
                 return;
             }
@@ -755,7 +762,7 @@ trait UserPortalTrait
 
     public function userPortalMenu()
     {
-        if (preg_match('~^/(?:start|menu)$~', (string) ($this->input['message'] ?? ''))) {
+        if (preg_match('~^/(?:start|menu|update)$~', (string) ($this->input['message'] ?? ''))) {
             unset($_SESSION['userPortalUi']['message_id']);
         }
 

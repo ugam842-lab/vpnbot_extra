@@ -1193,6 +1193,10 @@ $i = [
         'en' => 'Thread reopened.',
         'ru' => 'Обращение открыто.',
     ],
+    'user portal up to date' => [
+        'en' => 'already up to date',
+        'ru' => 'уже актуально',
+    ],
 ];
 
 if (file_exists(__DIR__ . '/i18n.override.php')) {
