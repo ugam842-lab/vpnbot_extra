@@ -403,6 +403,9 @@ trait UserPortalTrait
      */
     protected function isUserPortalUnboundText(): bool
     {
+        if (!empty($this->input['callback'])) {
+            return false;
+        }
         if ($this->admin || !$this->isUserPortalEnabled()) {
             return false;
         }
