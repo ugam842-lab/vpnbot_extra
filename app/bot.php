@@ -9882,7 +9882,9 @@ DNS-over-HTTPS with IP:
                 $this->send($target, $this->i18n('support closed'));
             }
         }
-        $this->send($this->input['chat'], $this->i18n('support closed'));
+        // Re-render the thread so the admin keeps the action buttons (the
+        // closed state removes «Ответить» and flips «Закрыть»→«Открыть»).
+        $this->supportThread($key, $threadId);
     }
 
     public function supportReopen($key, $threadId)
@@ -9892,7 +9894,8 @@ DNS-over-HTTPS with IP:
         if (!$this->setSupportThreadClosed($key, $threadId, false)) {
             return;
         }
-        $this->send($this->input['chat'], $this->i18n('support reopened'));
+        // Re-render the thread: reopening brings back the «Ответить» button.
+        $this->supportThread($key, $threadId);
     }
 
     public function supportThreadDelete($key, $threadId)
