@@ -12825,7 +12825,7 @@ DNS-over-HTTPS with IP:
         if ($button) {
             $extra = ['inline_keyboard' => $button];
         }
-        if (false !== $reply) {
+        if (false !== $reply && empty($button)) {
             $extra = [
                 'force_reply'             => true,
                 'input_field_placeholder' => $reply,
@@ -12929,7 +12929,10 @@ DNS-over-HTTPS with IP:
         if ($button) {
             $extra = ['inline_keyboard' => $button];
         }
-        if ($reply !== false) {
+        // editMessageText does NOT accept force_reply markup (Telegram rejects it
+        // with "inline keyboard expected"). When a prompt is being edited into an
+        // existing message, keep the inline keyboard and drop the force_reply.
+        if ($reply !== false && empty($button)) {
             $extra = [
                 'force_reply'             => true,
                 'input_field_placeholder' => $reply
