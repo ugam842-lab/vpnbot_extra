@@ -1281,6 +1281,66 @@ $i = [
         'en' => 'already up to date',
         'ru' => 'уже актуально',
     ],
+    'user portal check' => [
+        'en' => 'Check',
+        'ru' => 'Проверка',
+    ],
+    'user portal check title' => [
+        'en' => 'Key check',
+        'ru' => 'Проверка ключа',
+    ],
+    'user portal check running' => [
+        'en' => 'Checking your key with real traffic…',
+        'ru' => 'Проверяю ключ реальным трафиком…',
+    ],
+    'user portal check no vless' => [
+        'en' => 'No VLESS key for this subscription yet.',
+        'ru' => 'VLESS-ключа для этой подписки пока нет.',
+    ],
+    'user portal check ok' => [
+        'en' => 'Works — the tunnel passed real traffic.',
+        'ru' => 'Работает — туннель пропустил реальный трафик.',
+    ],
+    'user portal check fail' => [
+        'en' => 'Does not work',
+        'ru' => 'Не работает',
+    ],
+    'user portal check reason' => [
+        'en' => 'Reason',
+        'ru' => 'Причина',
+    ],
+    'user portal check layer connect' => [
+        'en' => 'server unreachable — the port does not answer',
+        'ru' => 'до сервера не достучаться — порт не отвечает',
+    ],
+    'user portal check layer tls' => [
+        'en' => 'connection drops on handshake — wrong SNI/certificate',
+        'ru' => 'соединение рвётся на рукопожатии — не тот SNI/сертификат',
+    ],
+    'user portal check layer timeout' => [
+        'en' => 'timeout — traffic does not pass',
+        'ru' => 'таймаут — трафик не проходит',
+    ],
+    'user portal check layer empty' => [
+        'en' => 'no answer from the node',
+        'ru' => 'нода не ответила',
+    ],
+    'user portal check restarting' => [
+        'en' => 'Checking again…',
+        'ru' => 'Проверяю снова…',
+    ],
+    'user portal empty proto' => [
+        'en' => 'Empty protocol',
+        'ru' => 'Пустой протокол',
+    ],
+    'user portal empty proto title' => [
+        'en' => 'Your MTProto link',
+        'ru' => 'Твоя MTProto-ссылка',
+    ],
+    'user portal empty proto empty' => [
+        'en' => 'MTProto is off in the admin panel yet.',
+        'ru' => 'MTProto в админке пока выключен.',
+    ],
 ];
 
 if (file_exists(__DIR__ . '/i18n.override.php')) {
