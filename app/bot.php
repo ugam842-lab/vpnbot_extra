@@ -306,6 +306,15 @@ class Bot
             case preg_match('~^/userPortalDeviceVless (\d+)_(\w+)$~', $this->input['callback'], $m):
                 $this->userPortalDeviceVless($m[1] . '_' . $m[2], $m[2]);
                 break;
+            case preg_match('~^/userPortalCheck$~', $this->input['callback'], $m):
+                $this->userPortalCheck();
+                break;
+            case preg_match('~^/userPortalCheckDevice (\d+)_(\w+)$~', $this->input['callback'], $m):
+                $this->userPortalCheckDevice($m[1] . '_' . $m[2], $m[2]);
+                break;
+            case preg_match('~^/userPortalEmptyProto$~', $this->input['callback'], $m):
+                $this->userPortalEmptyProto();
+                break;
             case preg_match('~^/userPortalDeviceWg (\d+)_(\w+)$~', $this->input['callback'], $m):
                 $this->userPortalDeviceWg($m[1] . '_' . $m[2], $m[2]);
                 break;

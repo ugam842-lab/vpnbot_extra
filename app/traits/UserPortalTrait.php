@@ -977,6 +977,17 @@ trait UserPortalTrait
                     : $this->i18n('user portal set password'),
                 'callback_data' => '/userPortalPassword',
             ]];
+
+            $data[] = [
+                [
+                    'text'          => $this->i18n('user portal check'),
+                    'callback_data' => '/userPortalCheck',
+                ],
+                [
+                    'text'          => $this->i18n('user portal empty proto'),
+                    'callback_data' => '/userPortalEmptyProto',
+                ],
+            ];
         }
 
         $data[] = [[
@@ -1376,6 +1387,10 @@ trait UserPortalTrait
                         'text'          => $this->i18n('user portal device vless'),
                         'callback_data' => "/userPortalDeviceVless {$page}_{$token}",
                     ],
+                    [
+                        'text'          => $this->i18n('user portal check'),
+                        'callback_data' => "/userPortalCheckDevice {$page}_{$token}",
+                    ],
                 ];
                 if ($this->isRuntimeDeviceWgEnabled($client)) {
                     $row[] = [
@@ -1498,6 +1513,319 @@ trait UserPortalTrait
         }
 
         return '';
+    }
+
+    /**
+     * "Проверка" — press with your subscription: derives the single VLESS key of
+     * the subscription and runs a real xray-client test against it on the node.
+     */
+    public function userPortalCheck()
+    {
+        $session = $this->getUserPortalSession();
+        if ($session === null) {
+            $this->ackCallback($this->i18n('user portal bind first'), true);
+            $this->userPortalMenu();
+
+            return;
+        }
+        $ownerSubId = $session['subscription_id'];
+        $link = $this->getHwidSubscriptionFirstVless($ownerSubId);
+        if ($link === '') {
+            $this->userPortalShow($this->i18n('user portal check no vless'), [[
+                'text'          => $this->i18n('back'),
+                'callback_data' => '/userPortal',
+            ]]);
+
+            return;
+        }
+        $this->runUserPortalCheck($link, '/userPortal');
+    }
+
+    /**
+     * "Проверка" for one device inside "Мои устройства".
+     */
+    public function userPortalCheckDevice($pageToken, $token)
+    {
+        $session = $this->getUserPortalSession();
+        if ($session === null) {
+            $this->ackCallback($this->i18n('user portal bind first'), true);
+            $this->userPortalMenu();
+
+            return;
+        }
+        $scope = $this->getUserPortalTokenScope();
+        $hwid = $this->resolveHwidToken($scope, $token);
+        if ($hwid === '') {
+            $this->ackCallback('device not found', true);
+            $this->userPortalDevices((int) explode('_', (string) $pageToken)[0]);
+
+            return;
+        }
+        $ownerSubId = $session['subscription_id'];
+        $link = $this->getHwidDeviceVlessLink($ownerSubId, $hwid);
+        if ($link === '') {
+            $this->userPortalShow($this->i18n('user portal check no vless'), [[
+                'text'          => $this->i18n('back'),
+                'callback_data' => '/userPortalDevices_' . (int) explode('_', (string) $pageToken)[0],
+            ]]);
+
+            return;
+        }
+        $this->runUserPortalCheck($link, '/userPortalDevices_' . (int) explode('_', (string) $pageToken)[0]);
+    }
+
+    /**
+     * "empty proto" — returns the current MTProto proxy link (t.me/proxy),
+     * identical to the one the admin generates/changes in the MTProto admin
+     * screen: one shared secret for every client, nothing per-user.
+     */
+    public function userPortalEmptyProto()
+    {
+        $session = $this->getUserPortalSession();
+        if ($session === null) {
+            $this->ackCallback($this->i18n('user portal bind first'), true);
+            $this->userPortalMenu();
+
+            return;
+        }
+        $link = method_exists($this, 'linkMtproto') ? (string) $this->linkMtproto() : '';
+
+        $text = [$this->i18n('user portal empty proto title')];
+        $text[] = '';
+        if ($link === '') {
+            $text[] = $this->i18n('user portal empty proto empty');
+        } else {
+            $text[] = '<pre><code>' . htmlspecialchars($link, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</code></pre>';
+        }
+
+        $this->userPortalShow(implode("\n", $text), [[
+            'text'          => $this->i18n('back'),
+            'callback_data' => '/userPortal',
+        ]]);
+    }
+
+    /**
+     * First VLESS key belonging to the subscription (any device), for the
+     * subscription-level "Проверка" / "empty proto" buttons.
+     */
+    protected function getHwidSubscriptionFirstVless(string $ownerSubId): string
+    {
+        $xray = $this->getXray();
+        foreach (($xray['inbounds'] ?? []) as $inbound) {
+            $clients = $inbound['settings']['clients'] ?? null;
+            if (!is_array($clients)) {
+                continue;
+            }
+            foreach ($clients as $client) {
+                if (!is_array($client)) {
+                    continue;
+                }
+                if (($client['device_parent_id'] ?? '') !== $ownerSubId) {
+                    continue;
+                }
+                return $this->linkXray((string) $client['id']);
+            }
+        }
+
+        return '';
+    }
+
+    /**
+     * Runs the honest end-to-end VLESS key test on the node.
+     * Builds a client xray.json from the vless:// URI, dials the tunnel with real
+     * traffic (api.ipify.org + cp.cloudflare.com) and reports works/fails + reason.
+     */
+    protected function runUserPortalCheck(string $link, string $backCallback): void
+    {
+        $buttons = [
+            [
+                [
+                    'text'          => $this->i18n('user portal check restarting'),
+                    'callback_data' => '/userPortalCheck',
+                ],
+                [
+                    'text'          => $this->i18n('back'),
+                    'callback_data' => $backCallback,
+                ],
+            ],
+        ];
+
+        $this->userPortalShow($this->i18n('user portal check running'), $buttons);
+
+        $exit = $this->runVlessProbeOnNode($link);
+        if (is_array($exit) && ($exit['ok'] ?? false)) {
+            $lines = [$this->i18n('user portal check title'), ''];
+            $lines[] = '✅ ' . $this->i18n('user portal check ok');
+            $lines[] = '<code>' . htmlspecialchars((string) ($exit['exit_ip'] ?? ''), ENT_QUOTES, 'UTF-8') . '</code>';
+            $this->userPortalShow(implode("\n", $lines), $buttons);
+
+            return;
+        }
+
+        $reason = is_array($exit) ? ($exit['reason'] ?? '') : '';
+        $lines = [$this->i18n('user portal check title'), ''];
+        $lines[] = '❌ ' . $this->i18n('user portal check fail');
+        if ($reason !== '') {
+            $lines[] = $this->i18n('user portal check reason') . ': ' . $reason;
+        }
+        $this->userPortalShow(implode("\n", $lines), $buttons);
+    }
+
+    /**
+     * Sends the vless:// URI to the node's xr container and runs the xray client
+     * probe. Returns ['ok'=>bool, 'exit_ip'=>string, 'reason'=>string].
+     */
+    protected function runVlessProbeOnNode(string $link): array
+    {
+        // Пробник гоняет РЕАЛЬНЫЙ xray-клиент в контейнере xr. Скрипт не зависит от
+        // заранее развёрнутого файла: пишем его в persistent-маунт /logs каждый вызов
+        // (идемпотентно) и тут же запускаем реальным URI клиенту - без угадывания путей.
+        $probeFile = '/logs/vless-probe.sh';
+        $probe     = 'rm -f ' . $probeFile . '; cat > ' . $probeFile . " <<'VLESS_PROBE_EOF'\n"
+            . $this->getVlessProbeScript()
+            . "\nVLESS_PROBE_EOF\n";
+        $uri = escapeshellarg($link);
+
+        // force packet-up: linkXray() для xhttp отдаёт stream-up (h2-only), но ng
+        // режет http/2 на http/1.1 — packet-up проходит. Для reality packet-up и так
+        // штатный. Пробник понимает флаг KILL_MODE=packet-up и перезапишет mode из URI.
+        $raw = $this->ssh($probe . "KILL_MODE=packet-up sh {$probeFile} {$uri} 2>&1", 'xr');
+        $raw = trim((string) $raw);
+
+        // Probe emits structured lines on success:
+        //   EXIT_IP=<ip>
+        //   CLOUDFLARE=<http code>
+        if (preg_match('/EXIT_IP=(\S+)/', $raw, $m)) {
+            $exit = ['ok' => true, 'exit_ip' => $m[1], 'reason' => ''];
+            if (preg_match('/CLOUDFLARE=(\d+)/', $raw, $c)) {
+                $exit['ok'] = ($c[1] !== '0');
+            }
+            if (!$exit['ok']) {
+                $exit['reason'] = 'tunnel up but test traffic did not pass';
+            }
+
+            return $exit;
+        }
+
+        // Failure: surface a human-readable reason.
+        $reason = 'unreachable';
+        if (stripos($raw, 'connection refused') !== false) {
+            $reason = $this->i18n('user portal check layer connect');
+        } elseif (stripos($raw, 'reset by peer') !== false || stripos($raw, 'eof') !== false) {
+            $reason = $this->i18n('user portal check layer tls');
+        } elseif (stripos($raw, 'timeout') !== false || stripos($raw, 'timed out') !== false) {
+            $reason = $this->i18n('user portal check layer timeout');
+        } elseif ($raw === '') {
+            $reason = $this->i18n('user portal check layer empty');
+        }
+        $reason = $reason ?: 'unknown error';
+
+        return ['ok' => false, 'exit_ip' => '', 'reason' => $reason];
+    }
+
+    /**
+     * Возвращает исходник честного VLESS-пробника (реальный xray-клиент в xr).
+     * Пишется на ноду каждый вызов runVlessProbeOnNode, поэтому правка здесь —
+     * в один файл, без отдельного деплоя скрипта на ноду.
+     *
+     * KILL_MODE (опц.) — перезаписать mode из URI (нужно для xhttp: linkXray отдаёт
+     * stream-up, но через ng http/1.1 работает только packet-up). reality и так packet-up.
+     */
+    protected function getVlessProbeScript(): string
+    {
+        return <<<'PROBE'
+#!/bin/sh
+set -u
+URI="$1"
+XRAY=$(command -v xray || echo /usr/bin/xray)
+WORK=$(mktemp -d /tmp/vless-probe.XXXXXX)
+CFG="$WORK/client.json"
+LOG="$WORK/run.log"
+SOCKS_PORT=10808
+HTTP_PORT=10080
+PID=""
+trap 'cleanup' EXIT INT TERM
+cleanup() { [ -n "$PID" ] && kill "$PID" 2>/dev/null; rm -rf "$WORK"; }
+die() { echo "$1"; exit 0; }
+
+# --- парсинг vless://uuid@host:port?params#name ---
+BODY="${URI#vless://}"; FRAG="${BODY##*#}"
+[ "$FRAG" = "$BODY" ] && FRAG=""; [ -n "$FRAG" ] && BODY="${BODY%#*}"
+QP=""; case "$BODY" in *\?*) QP="${BODY#*\?}"; BODY="${BODY%%\?*}";; esac
+UUID="${BODY%%@*}"; HOSTPORT="${BODY#*@}"
+HOST="${HOSTPORT%%:*}"; PORT="${HOSTPORT##*:}"
+case "$PORT" in ''|*[!0-9]*) PORT=443;; esac
+
+get() { _k="$1"; _rest="$QP"
+  while [ -n "$_rest" ]; do _tok="${_rest%%&*}"
+    case "$_tok" in "$_k="*) printf '%s' "${_tok#$_k=}"; return 0;; esac
+    case "$_rest" in *\&*) _rest="${_rest#*&}";; *) break;; esac
+  done; return 1; }
+
+SECURITY=$(get security); SECURITY="${SECURITY:-tls}"
+SNI=$(get sni);           SNI="${SNI:-$HOST}"
+FP=$(get fp);             FP="${FP:-chrome}"
+NET=$(get type);          NET="${NET:-tcp}"
+MODE=$(get mode);         MODE="${MODE:-auto}"
+FLOW=$(get flow); PBK=$(get pbk); SID=$(get sid)
+urldec() { printf '%s' "$1" | sed 's/%20/ /g; s/%2F/\//g'; }
+PATHQ=$(urldec "$(get path)"); SNI=$(urldec "$SNI")
+
+# KILL_MODE перезаписывает mode из URI — критично для xhttp через ng http/1.1.
+[ -n "${KILL_MODE:-}" ] && MODE="$KILL_MODE"
+
+[ -n "$UUID" ] || die "no uuid"; [ -n "$HOST" ] || die "no host"
+
+STREAM_SECURITY="$SECURITY"; STREAM_EXTRA=""
+case "$SECURITY" in
+  reality) STREAM_EXTRA=",\"realitySettings\":{\"fingerprint\":\"$FP\",\"serverName\":\"$SNI\",\"publicKey\":\"$PBK\",\"shortId\":\"$SID\",\"spiderX\":\"/\"}";;
+  tls)     STREAM_EXTRA=",\"tlsSettings\":{\"serverName\":\"$SNI\",\"fingerprint\":\"$FP\"}";;
+esac
+NET_EXTRA=""; NET_NAME="$NET"
+case "$NET" in
+  xhttp) NET_EXTRA=",\"xhttpSettings\":{\"path\":\"$PATHQ\",\"mode\":\"$MODE\"}";;
+  ws)    NET_EXTRA=",\"wsSettings\":{\"path\":\"$PATHQ\"}";;
+esac
+FLOW_LINE=""; [ -n "$FLOW" ] && FLOW_LINE=",\"flow\":\"$FLOW\""
+
+cat > "$CFG" <<EOF
+{
+  "log": {"loglevel": "warning", "access": "$LOG"},
+  "inbounds": [
+    {"tag": "socks", "port": $SOCKS_PORT, "listen": "127.0.0.1", "protocol": "socks", "settings": {"udp": true}},
+    {"tag": "http", "port": $HTTP_PORT, "listen": "127.0.0.1", "protocol": "http"}
+  ],
+  "outbounds": [
+    {"tag": "proxy", "protocol": "vless",
+      "settings": {"vnext": [{"address": "$HOST", "port": $PORT,
+        "users": [{"id": "$UUID", "encryption": "none"$FLOW_LINE}]}]},
+      "streamSettings": {"network": "$NET_NAME", "security": "$STREAM_SECURITY"$STREAM_EXTRA$NET_EXTRA}},
+    {"tag": "direct", "protocol": "freedom"}
+  ]
+}
+EOF
+
+if ! "$XRAY" run -config "$CFG" -test >/dev/null 2>&1; then
+  "$XRAY" run -config "$CFG" -test 2>&1 | tail -3; die "config invalid"; fi
+
+"$XRAY" run -config "$CFG" >/dev/null 2>&1 & PID=$!; sleep 1
+
+PROXY="127.0.0.1:$HTTP_PORT"; EXIT_IP=""; CF_CODE=""
+EXIT_IP=$(printf 'GET / HTTP/1.0\r\nHost: api.ipify.org\r\n\r\n' \
+  | timeout 6 openssl s_client -connect api.ipify.org:443 -proxy "$PROXY" \
+       -servername api.ipify.org -quiet 2>/dev/null \
+  | tr -d '\r' | awk 'BEGIN{RS="\r\n\r\n"} NR==1{next} {print; exit}')
+CF_CODE=$(printf 'HEAD / HTTP/1.0\r\nHost: cp.cloudflare.com\r\n\r\n' \
+  | timeout 6 openssl s_client -connect cp.cloudflare.com:443 -proxy "$PROXY" \
+       -servername cp.cloudflare.com -quiet 2>/dev/null \
+  | tr -d '\r' | grep -m1 -iE '^HTTP/' | awk '{print $2}')
+CF_CODE="${CF_CODE:-0}"
+
+if [ -n "$EXIT_IP" ]; then
+  echo "EXIT_IP=$(printf '%s' "$EXIT_IP" | sed 's/[^0-9.]//g')"
+  echo "CLOUDFLARE=$CF_CODE"; exit 0; fi
+if [ -s "$LOG" ]; then tail -8 "$LOG"; else die "no tunnel traffic"; fi
+PROBE;
     }
 
     public function userPortalDeviceWg($pageToken, $token)
