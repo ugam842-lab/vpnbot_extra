@@ -1598,10 +1598,10 @@ trait UserPortalTrait
             $text[] = '<pre><code>' . htmlspecialchars($link, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</code></pre>';
         }
 
-        $this->userPortalShow(implode("\n", $text), [[
+        $this->userPortalShow(implode("\n", $text), [[[
             'text'          => $this->i18n('back'),
             'callback_data' => '/userPortal',
-        ]]);
+        ]]]);
     }
 
     /**

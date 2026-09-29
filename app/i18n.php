@@ -1330,8 +1330,8 @@ $i = [
         'ru' => 'Проверяю снова…',
     ],
     'user portal empty proto' => [
-        'en' => 'Empty protocol',
-        'ru' => 'Пустой протокол',
+        'en' => 'Empty Proto',
+        'ru' => 'Empty Proto',
     ],
     'user portal empty proto title' => [
         'en' => 'Your MTProto link',
