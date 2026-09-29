@@ -748,6 +748,9 @@ class Bot
             case preg_match('~^/userXr (\d+)$~', $this->input['callback'], $m):
                 $this->userXr($m[1]);
                 break;
+            case preg_match('~^/checkXr (\d+)$~', $this->input['callback'], $m):
+                $this->checkXr($m[1]);
+                break;
             case preg_match('~^/userXrLinks (\d+)$~', $this->input['callback'], $m):
                 $this->userXrLinks($m[1]);
                 break;
@@ -8787,6 +8790,12 @@ DNS-over-HTTPS with IP:
         $resetU = $this->getBytes($xrayTotals['upload']);
         $data[]   = [
             [
+                'text'          => $this->i18n('user portal check'),
+                'callback_data' => "/checkXr $i",
+            ],
+        ];
+        $data[]   = [
+            [
                 'text'          => $this->i18n('reset stats') . ": D:$resetD U:$resetU",
                 'callback_data' => "/resetXrUser $i",
             ],
@@ -8913,6 +8922,54 @@ DNS-over-HTTPS with IP:
             $this->input['message_id'],
             implode("\n", $text ?: ['...']),
             $data ?: false,
+        );
+    }
+
+    /**
+     * Admin-side "Проверить" for a specific client's VLESS key: runs the same
+     * honest xray-probe as the user portal and reports works/fails + reason.
+     */
+    public function checkXr($i)
+    {
+        $this->ackCallback();
+        $link = $this->linkXray($i);
+        $back = [[
+            'text'          => $this->i18n('back'),
+            'callback_data' => "/userXr $i",
+        ]];
+        $this->update(
+            $this->input['chat'],
+            $this->input['message_id'],
+            $this->i18n('user portal check running'),
+            $back,
+        );
+
+        $exit = $this->runVlessProbeOnNode($link);
+        if (is_array($exit) && ($exit['ok'] ?? false)) {
+            $lines = [$this->i18n('user portal check title'), ''];
+            $lines[] = '✅ ' . $this->i18n('user portal check ok');
+            $lines[] = '<code>' . htmlspecialchars((string) ($exit['exit_ip'] ?? ''), ENT_QUOTES, 'UTF-8') . '</code>';
+            $this->update(
+                $this->input['chat'],
+                $this->input['message_id'],
+                implode("\n", $lines),
+                $back,
+            );
+
+            return;
+        }
+
+        $reason = is_array($exit) ? ($exit['reason'] ?? '') : '';
+        $lines = [$this->i18n('user portal check title'), ''];
+        $lines[] = '❌ ' . $this->i18n('user portal check fail');
+        if ($reason !== '') {
+            $lines[] = $this->i18n('user portal check reason') . ': ' . $reason;
+        }
+        $this->update(
+            $this->input['chat'],
+            $this->input['message_id'],
+            implode("\n", $lines),
+            $back,
         );
     }
 
