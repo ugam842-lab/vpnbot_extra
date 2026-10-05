@@ -1,0 +1,198 @@
+<?php
+
+require __DIR__ . '/timezone.php';
+require __DIR__ . '/config.php';
+if (!empty($c['debug'] ?? false) || vpnbot_requests_logging_enabled()) {
+    require __DIR__ . '/debug.php';
+}
+require __DIR__ . '/calc.php';
+require __DIR__ . '/bot.php';
+require __DIR__ . '/i18n.php';
+if (file_exists(__DIR__ . '/override.php')) {
+    include __DIR__ . '/override.php';
+}
+$bot  = new Bot($c['key'], $i);
+$hash = $bot->getHashBot();
+if (!empty($_GET['hash'])) {
+    $t = $_GET;
+    unset($t['hash']);
+    ksort($t);
+    foreach ($t as $k => $v) {
+        $s[] = "$k=$v";
+    }
+    $s      = implode("\n", $s);
+    $sk     = hash_hmac('sha256', $c['key'], "WebAppData", true);
+    $webapp = hash_hmac('sha256', $s, $sk) == $_GET['hash'];
+}
+
+switch (true) {
+    // tlgrm
+    case 'POST' == $_SERVER['REQUEST_METHOD'] && preg_match('~^/tlgrm~', $_SERVER['REQUEST_URI']) && $_GET['k'] == $c['key']:
+        if ($bot->isChildNode()) {
+            http_response_code(403);
+            header('Content-Type: text/plain; charset=utf-8');
+            echo 'child node';
+            exit;
+        }
+        vpnbot_trace('hit index.php uri=' . ($_SERVER['REQUEST_URI'] ?? ''));
+        $bot->input();
+        break;
+
+    case preg_match('~^/pac[0-9a-f]{8}/node-bootstrap/([^/?]+)~', $_SERVER['REQUEST_URI'], $m):
+        $bot->handleNodeBootstrap($m[1]);
+        break;
+
+    case preg_match('~^/pac[0-9a-f]{8}/node-repair/([^/?]+)~', $_SERVER['REQUEST_URI'], $m):
+        $bot->handleNodeRepair($m[1]);
+        break;
+
+    case preg_match('~^/pac[0-9a-f]{8}/node-register~', $_SERVER['REQUEST_URI']) && 'POST' === $_SERVER['REQUEST_METHOD']:
+        $bot->handleNodeRegister();
+        break;
+
+    case preg_match('~^/pac[0-9a-f]{8}/node-sync~', $_SERVER['REQUEST_URI']) && 'POST' === $_SERVER['REQUEST_METHOD']:
+        $bot->handleNodeSyncReceive();
+        break;
+
+    case preg_match('~^/pac[0-9a-f]{8}/node-update~', $_SERVER['REQUEST_URI']) && 'POST' === $_SERVER['REQUEST_METHOD']:
+        $bot->handleNodeUpdateReceive();
+        break;
+
+    // save template
+    case preg_match('~^' . preg_quote("/webapp$hash/save") . '~', $_SERVER['REQUEST_URI']) && $webapp && !empty($_POST['json']):
+        echo json_encode($bot->saveTemplate($_POST['name'], $_POST['type'], $_POST['json']));
+        break;
+
+    // adguard cookie
+    case preg_match('~^' . preg_quote("/webapp$hash/check") . '~', $_SERVER['REQUEST_URI']) && $webapp:
+        setcookie('c', $hash, 0, '/');
+        echo "/adguard$hash/";
+        break;
+
+    case preg_match('~^/pac[0-9a-f]{8}/sub~', $_SERVER['REQUEST_URI']) && file_exists(__DIR__ . '/subscription.php'):
+        $bot->sub();
+        exit;
+
+    // subs & pac (accept any instance hash in URL — old subscription links must keep working)
+    case preg_match('~^/pac[0-9a-f]{8}~', $_SERVER['REQUEST_URI']):
+        if (!empty($t = $bot->decodePacUrlPayload(explode('/', $_SERVER['REQUEST_URI'])[2] ?? ''))) {
+            $_GET = array_merge($_GET, $t);
+        }
+        $type    = $_GET['t'] ?? 'pac';
+        $address = !empty($_GET['a'] ?? '') ? $_GET['a'] : '127.0.0.1';
+        $port    = !empty($_GET['p'] ?? '') ? $_GET['p'] : '1080';
+        switch ($type) {
+            case 'cl':
+            case 'wg':
+                $bot->subscription();
+                exit;
+
+            case 'te':
+                if (($_GET['ty'] ?? '') !== 'clash') {
+                    http_response_code(404);
+                    header('Content-Type: text/plain; charset=utf-8');
+                    echo 'Template editor supports clash only';
+                    exit;
+                }
+                if (!empty($_GET['te'])) {
+                    $t = $bot->getPacConf()['classtemplates'][$_GET['te']];
+                } else {
+                    $t = json_decode(file_get_contents('/config/clash.json'), true);
+                }
+                if ($t) {
+                    header('Content-Type: text/html');
+                    $t = json_encode($t, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+                    $name = $_GET['te'] ?: 'origin';
+                    $type = 'clash';
+                    echo <<<HTML
+                        <!DOCTYPE HTML>
+                        <html lang="en" style="height:100%">
+                        <head>
+                            <!-- when using the mode "code", it's important to specify charset utf-8 -->
+                            <meta charset="utf-8">
+                            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+                            <link href="/webapp$hash/jsoneditor.min.css" rel="stylesheet" type="text/css">
+                            <script src="/webapp$hash/jsoneditor.min.js"></script>
+                            <script src="/webapp$hash/jquery-3.7.1.min.js"></script>
+                            <script src="https://telegram.org/js/telegram-web-app.js"></script>
+                        </head>
+                        <body style="height:100%">
+                            <div id="jsoneditor" style="height:100%"></div>
+
+                            <script>
+                                jQuery(function($) {
+                                    var tg = window.Telegram.WebApp;
+                                    // create the editor
+                                    const container = document.getElementById("jsoneditor")
+                                    const options = {}
+                                    const editor = new JSONEditor(container, options)
+                                    editor.set({$t})
+                                    tg.MainButton.show().setText('{$bot->i18n('save')}').onClick(function (e) {
+                                        var self = this;
+                                        var raw;
+                                        try {
+                                            raw = editor.getText();
+                                            JSON.parse(raw);
+                                        } catch (err) {
+                                            tg.showAlert('JSON parse error: ' + (err && err.message ? err.message : err));
+                                            return;
+                                        }
+                                        tg.MainButton.setText('...');
+                                        $.ajax({
+                                            url: '/webapp$hash/save?' + tg.initData,
+                                            method: 'POST',
+                                            data: {
+                                                name: '$name',
+                                                type: '$type',
+                                                json: raw
+                                            },
+                                            dataType: 'json'
+                                        }).done(function (r) {
+                                            if (r.status == true) {
+                                                if (r.warnings && r.warnings.length) {
+                                                    tg.showAlert(r.message || ('Warnings:\\n' + r.warnings.join('\\n')));
+                                                }
+                                                tg.MainButton.setText('{$bot->i18n('success')}')
+                                                setTimeout(() => {
+                                                    tg.close();
+                                                }, 500);
+                                            } else {
+                                                tg.showAlert(r.message || '{$bot->i18n('error')}');
+                                                tg.MainButton.setText('{$bot->i18n('save')}');
+                                            }
+                                        }).fail(function (r) {
+                                            tg.showAlert('{$bot->i18n('error')}');
+                                            tg.MainButton.setText('{$bot->i18n('save')}');
+                                        });
+                                    });
+                                });
+                            </script>
+                        </body>
+                        </html>
+                        HTML;
+                    exit;
+                }
+
+            default:
+                if (file_exists($file = __DIR__ . "/zapretlists/$type")) {
+                    $pac = file_get_contents($file);
+                    header('Content-Type: text/plain');
+                    echo str_replace([
+                        '~address~',
+                        '~port~',
+                    ], [
+                        $address,
+                        $port,
+                    ], $pac);
+                    exit;
+                }
+                break;
+        }
+        break;
+
+    default:
+        http_response_code(404);
+        header('Content-Type: text/plain; charset=utf-8');
+        echo "Not found.";
+}

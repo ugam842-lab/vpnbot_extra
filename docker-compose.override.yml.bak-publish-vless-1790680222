@@ -1,0 +1,15 @@
+---
+services:
+  wg1:
+    ports:
+    - 51821:51821/udp
+  tg:
+    ports:
+    - 4443:4443
+  ad:
+    ports:
+    - 853:853
+  hy:
+    ports:
+    - 1935:443/udp
+...

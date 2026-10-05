@@ -1,0 +1,150 @@
+/* Против VS напротив — мемы с котиками
+   Оформление: тёмная тема, крупный текст, никаких висячих хвостов. */
+
+:root {
+  --bg: #14110f;
+  --panel: #1e1a17;
+  --ink: #f5efe8;
+  --muted: #b3a79b;
+  --accent: #ffb347;
+  --accent-2: #ff7a5c;
+  --line: #322b26;
+}
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 19px;
+  line-height: 1.65;
+}
+
+a { color: var(--accent); text-decoration: none; border-bottom: 1px dashed var(--accent); }
+a:hover { color: var(--accent-2); border-bottom-color: var(--accent-2); }
+
+.wrap { max-width: 980px; margin: 0 auto; padding: 0 22px; }
+
+/* Шапка */
+header.site {
+  border-bottom: 1px solid var(--line);
+  background: linear-gradient(180deg, #1d1815 0%, #14110f 100%);
+  padding: 26px 0 20px;
+}
+
+.brand {
+  font-size: 34px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  margin: 0 0 6px;
+}
+
+.brand .vs { color: var(--accent); }
+.brand .or { color: var(--muted); font-size: 22px; font-weight: 400; }
+
+.tagline { color: var(--muted); margin: 0; font-size: 16px; font-style: italic; }
+
+nav.site { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 8px 14px; }
+nav.site a {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 5px 14px;
+  font-size: 15px;
+  font-family: system-ui, sans-serif;
+  border-bottom: 1px solid var(--line);
+}
+nav.site a:hover { border-color: var(--accent); }
+nav.site a.here { background: var(--accent); color: #201a12; border-color: var(--accent); }
+
+/* Главная картинка */
+.hero { margin: 26px 0 8px; }
+.hero img {
+  width: 100%;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  display: block;
+}
+.hero figcaption { color: var(--muted); font-size: 15px; margin-top: 8px; }
+
+h1 { font-size: 30px; margin: 34px 0 10px; }
+h2 { font-size: 24px; margin: 32px 0 10px; border-bottom: 1px solid var(--line); padding-bottom: 6px; }
+h3 { font-size: 20px; margin: 24px 0 8px; }
+
+p { margin: 0 0 14px; }
+
+.lead { font-size: 21px; color: #ede4da; }
+
+/* Сетка мемов */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 18px;
+  margin: 22px 0 10px;
+}
+
+.meme {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.meme img { width: 100%; display: block; aspect-ratio: 1 / 1; object-fit: cover; }
+.meme .cap { padding: 12px 14px 4px; font-family: system-ui, sans-serif; font-size: 16px; }
+.meme .num { color: var(--muted); font-size: 13px; font-family: system-ui, sans-serif; padding: 0 14px; }
+.meme .rate { padding: 10px 14px 14px; font-family: system-ui, sans-serif; font-size: 15px; color: var(--accent); }
+
+/* Цитата */
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 22px 0;
+  padding: 6px 0 6px 16px;
+  color: #e6dcd1;
+  font-style: italic;
+}
+
+/* Заметки, предупреждения */
+.note {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin: 20px 0;
+  font-family: system-ui, sans-serif;
+  font-size: 16px;
+}
+
+table { border-collapse: collapse; width: 100%; margin: 20px 0; font-family: system-ui, sans-serif; font-size: 16px; }
+th, td { border: 1px solid var(--line); padding: 9px 12px; text-align: left; }
+th { background: #262020; }
+
+ul { padding-left: 22px; }
+li { margin-bottom: 6px; }
+
+code {
+  background: #2a2320;
+  padding: 1px 6px;
+  border-radius: 5px;
+  font-size: 15px;
+}
+
+/* Подвал */
+footer.site {
+  border-top: 1px solid var(--line);
+  margin-top: 44px;
+  padding: 22px 0 40px;
+  color: var(--muted);
+  font-size: 15px;
+  font-family: system-ui, sans-serif;
+}
+footer.site a { border-bottom: 1px dashed var(--muted); color: var(--muted); }
+footer.site a:hover { color: var(--accent); border-color: var(--accent); }
+
+.kot { font-family: system-ui, sans-serif; font-size: 14px; color: var(--muted); }
