@@ -8,7 +8,6 @@ u: # запуск контейнеров
 	@if [ -d .git ]; then \
 		branch=$$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo master); \
 		git fetch origin $$branch --quiet || git fetch origin --quiet; \
-		git checkout origin/$$branch -- app update makefile version || true; \
 	fi
 	bash ./update/update.sh &
 	bash ./scripts/bootstrap_config.sh
