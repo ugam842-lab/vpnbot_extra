@@ -4529,6 +4529,7 @@ PROBE;
             $out[] = [
                 'index' => (int) $index,
                 'name'  => $this->getName($client['interface']),
+                'time'  => (string) ($client['interface']['## time'] ?? ''),
             ];
         }
 
@@ -4572,6 +4573,7 @@ PROBE;
             $out[] = [
                 'index' => (int) $index,
                 'name'  => $this->getName($iface),
+                'time'  => (string) ($iface['## time'] ?? ''),
             ];
         }
 
@@ -4788,7 +4790,14 @@ PROBE;
             foreach ($slice as $i => $item) {
                 $number = $page * $perPage + $i + 1;
                 $name = $item['name'] !== '' ? $item['name'] : ('WG ' . $number);
-                $text[] = $number . '. <b>' . htmlspecialchars($name, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</b>';
+                $line = $number . '. <b>' . htmlspecialchars($name, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</b>';
+                if (!empty($item['time'])) {
+                    $ts = strtotime((string) $item['time']);
+                    if ($ts !== false) {
+                        $line .= ' — ' . $this->i18n('user portal expires') . ' ' . date('d.m.Y H:i', $ts);
+                    }
+                }
+                $text[] = $line;
                 $data[] = [[
                     'text'          => $this->i18n('user portal issued wg show') . ' ' . $name,
                     'callback_data' => '/userPortalIssuedWgShow ' . $item['index'],
@@ -5130,8 +5139,17 @@ PROBE;
                 $already = (string) ($iface['## owner_tg'] ?? '') === $telegramId
                     || ($ownerSubId !== '' && (string) ($iface['## owner_sub_id'] ?? '') === $ownerSubId);
                 $selected = isset($select[(int) $index]);
+                // Срок жизни конфига — показываем в списке выдачи, чтобы было
+                // видно, что он не безлимитный, и что он наследует срок кабинета.
+                $expiry = '';
+                if (!empty($iface['## time'])) {
+                    $ts = strtotime((string) $iface['## time']);
+                    if ($ts !== false) {
+                        $expiry = ' · ' . $this->i18n('user portal expires') . ' ' . date('d.m.Y', $ts);
+                    }
+                }
                 $data[] = [[
-                    'text'          => ($already || $selected ? '✓ ' : '') . $label . ($already ? ' · ' . $this->i18n('user portal wg pick bound') : ''),
+                    'text'          => ($already || $selected ? '✓ ' : '') . $label . $expiry . ($already ? ' · ' . $this->i18n('user portal wg pick bound') : ''),
                     'callback_data' => '/userPortalWgToggle ' . $index . ' ' . rawurlencode($canonicalKey) . '_' . $page,
                 ]];
             }
