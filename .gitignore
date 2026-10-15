@@ -20,9 +20,6 @@ mirror/.env
 update/*
 !update/update.sh
 
-__pycache__/
-*.pyc
-
 override.env
 override.html
 override.php
@@ -31,10 +28,20 @@ backup.json
 app/webapp/override/
 .rest
 .env
-/scratch/
-/singbox_windows/singbox.zip
 
 /subscription.php
 location.conf
 override.conf
 i18n.override.php
+
+# prod binaries + local snapshots (do not version)
+/bin/
+.bak_*
+backup-*
+*.bak_*
+*_snapshot_*
+bot.php.nodefix
+i18n.php.nodefix
+scratch_*
+support_test.php
+test_portal_binding.php

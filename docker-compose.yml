@@ -427,39 +427,3 @@ services:
             default:
                 ipv4_address: 10.10.0.17
         logging: *default-logging
-
-    polling:
-        # Long-polling (getUpdates) fallback. Opt-in via `--profile polling`.
-        # Start it only together with `polling_mode: 1` in pac.json so init.php
-        # runs deleteWebhook() and webhook/polling never fight over updates.
-        image: mercurykd/vpnbot-php:1.7
-        profiles: ["polling"]
-        volumes:
-            - ./config/.profile:/root/.ashrc:ro
-            - ./config/php.ini:/etc/php81/php.ini
-            - ./config/:/config/
-            - ./certs/:/certs/
-            - ./app:/app
-            - ./logs/:/logs/
-            - ./version:/version
-            - ./update:/update
-        environment:
-            IP: ${IP}
-            VER: ${VER}
-        env_file:
-            - path: ./.env
-              required: true
-            - path: ./override.env
-              required: false
-        hostname: polling
-        container_name: polling
-        restart: unless-stopped
-        command: ["php", "/app/polling.php"]
-        working_dir: /app
-        depends_on:
-            php:
-                condition: service_healthy
-        networks:
-            default:
-                ipv4_address: 10.10.0.16
-        logging: *default-logging

@@ -12,6 +12,7 @@ u: # запуск контейнеров
 	bash ./update/update.sh &
 	bash ./scripts/bootstrap_config.sh
 	touch ./override.env ./docker-compose.override.yml ./config/location.conf ./config/override.conf
+	bash ./scripts/ensure_bin.sh
 	IP=$(IP) VER=$(VER) docker compose --env-file ./.env --env-file ./override.env up -d --force-recreate
 	@(sleep 8; docker compose exec -T php php /app/push_nodes.php both 35) >/dev/null 2>&1 &
 d: # остановка контейнеров
@@ -55,10 +56,6 @@ s:
 	git status -su
 webhook:
 	docker compose exec php php checkwebhook.php
-polling: # запустить long-polling fallback (нужен polling_mode=1 в pac.json)
-	docker compose --profile polling up -d polling
-unpolling: # остановить long-polling fallback
-	docker compose --profile polling rm -sf polling
 reset:
 	make d
 	git reset --hard

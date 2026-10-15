@@ -216,6 +216,35 @@ class Bot
         }
     }
 
+    /**
+     * Для админа: сопоставить «свежее» текстовое сообщение (без reply_to) с
+     * висящим ожиданием ответа (userPortalPromptInput / send(..., reply:)).
+     * Возвращает message_id ожидающего сообщения, чтобы action() подставил его
+     * в input['reply'] и диспетчер reply() забрал текст по $_SESSION['reply'].
+     * Возвращает null, когда ожидания нет — тогда текст уходит обычным путём.
+     */
+    protected function resolvePendingAdminReplyMessageId(): ?int
+    {
+        if (isset($_SESSION['reply']) && is_array($_SESSION['reply'])) {
+            // Приоритет — ожидание из user-portal (getPendingUserPortalReply),
+            // оно регистрируется через userPortalShow и несёт callback+args.
+            if (method_exists($this, 'getPendingUserPortalReply')) {
+                $pending = $this->getPendingUserPortalReply();
+                if (is_array($pending) && !empty($pending['message_id'])) {
+                    return (int) $pending['message_id'];
+                }
+            }
+            // Общий случай: любое ожидание с непустым callback (для админа).
+            foreach ($_SESSION['reply'] as $messageId => $v) {
+                if (is_array($v) && ($v['callback'] ?? '') !== '') {
+                    return (int) $messageId;
+                }
+            }
+        }
+
+        return null;
+    }
+
     public function sd($var, $log = false, $json = false, $raw = false)
     {
         if ($log) {
@@ -306,15 +335,6 @@ class Bot
             case preg_match('~^/userPortalDeviceVless (\d+)_(\w+)$~', $this->input['callback'], $m):
                 $this->userPortalDeviceVless($m[1] . '_' . $m[2], $m[2]);
                 break;
-            case preg_match('~^/userPortalCheck$~', $this->input['callback'], $m):
-                $this->userPortalCheck();
-                break;
-            case preg_match('~^/userPortalCheckDevice (\d+)_(\w+)$~', $this->input['callback'], $m):
-                $this->userPortalCheckDevice($m[1] . '_' . $m[2], $m[2]);
-                break;
-            case preg_match('~^/userPortalEmptyProto$~', $this->input['callback'], $m):
-                $this->userPortalEmptyProto();
-                break;
             case preg_match('~^/userPortalDeviceWg (\d+)_(\w+)$~', $this->input['callback'], $m):
                 $this->userPortalDeviceWg($m[1] . '_' . $m[2], $m[2]);
                 break;
@@ -359,8 +379,29 @@ class Bot
             case preg_match('~^/userPortalIssueConfigPrompt$~', $this->input['callback'], $m):
                 $this->userPortalIssueConfigPrompt();
                 break;
+            case preg_match('~^/userPortalAsSelf$~', $this->input['callback'], $m):
+                $this->userPortalAsSelf();
+                break;
+            case preg_match('~^/userPortalUsers (\d+)$~', $this->input['callback'], $m):
+                $this->userPortalUsers((int) $m[1]);
+                break;
             case preg_match('~^/userPortalUsers$~', $this->input['callback'], $m):
                 $this->userPortalUsers();
+                break;
+            case preg_match('~^/userPortalRequests (\d+)$~', $this->input['callback'], $m):
+                $this->userPortalRequests((int) $m[1]);
+                break;
+            case preg_match('~^/userPortalRequests$~', $this->input['callback'], $m):
+                $this->userPortalRequests();
+                break;
+            case preg_match('~^/userPortalApprove (\d+)$~', $this->input['callback'], $m):
+                $this->userPortalApprove($m[1]);
+                break;
+            case preg_match('~^/userPortalReject (\d+)$~', $this->input['callback'], $m):
+                $this->userPortalReject($m[1]);
+                break;
+            case preg_match('~^/userPortalRestore (\d+)$~', $this->input['callback'], $m):
+                $this->userPortalRestore($m[1]);
                 break;
             case preg_match('~^/userPortalCard (.+)$~', $this->input['callback'], $m):
                 $this->userPortalCard($m[1]);
@@ -371,14 +412,89 @@ class Bot
             case preg_match('~^/userPortalCardVless (.+)$~', $this->input['callback'], $m):
                 $this->userPortalCardVless($m[1]);
                 break;
+            case preg_match('~^/userPortalCardSubPick (.+)$~', $this->input['callback'], $m):
+                $this->userPortalCardSubPick(rawurldecode($m[1]), 0);
+                break;
+            case preg_match('~^/userPortalCardEmptyProto (.+)$~', $this->input['callback'], $m):
+                $this->userPortalCardEmptyProto($m[1]);
+                break;
+            case preg_match('~^/userPortalCardSubIssue (.+) (\d+)$~', $this->input['callback'], $m):
+                $this->userPortalCardSubIssue(rawurldecode($m[1]), (int) $m[2]);
+                break;
+            case preg_match('~^/userPortalSubPick (.+?)_(\d+)$~', $this->input['callback'], $m):
+                $this->userPortalCardSubPick(rawurldecode($m[1]), (int) $m[2]);
+                break;
             case preg_match('~^/userPortalCardWg (.+)$~', $this->input['callback'], $m):
                 $this->userPortalCardWg($m[1]);
+                break;
+            case preg_match('~^/userPortalCardRevokeVless (.+)$~', $this->input['callback'], $m):
+                $this->userPortalCardRevokeVless($m[1]);
                 break;
             case preg_match('~^/userPortalCardRevoke (.+)$~', $this->input['callback'], $m):
                 $this->userPortalCardRevoke($m[1]);
                 break;
+            case preg_match('~^/userPortalCardDelete (.+)$~', $this->input['callback'], $m):
+                $this->userPortalCardDelete(rawurldecode($m[1]));
+                break;
+            case preg_match('~^/userPortalWriteTo (\d+)$~', $this->input['callback'], $m):
+                $this->userPortalWriteTo($m[1]);
+                break;
+            case preg_match('~^/userPortalReply (\d+)$~', $this->input['callback'], $m):
+                $this->userPortalReply($m[1]);
+                break;
             case preg_match('~^/userPortalGrantPrompt$~', $this->input['callback'], $m):
                 $this->userPortalGrantPrompt();
+                break;
+            case preg_match('~^/userPortalGrantPick (\d+) (\d+)$~', $this->input['callback'], $m):
+                $this->userPortalGrantPick($m[1], (int) $m[2]);
+                break;
+            case preg_match('~^/userPortalGrantPickSave (\d+) (\d+)$~', $this->input['callback'], $m):
+                $this->userPortalGrantPickSave($m[1], (int) $m[2]);
+                break;
+            case preg_match('~^/userPortalIssuedWgShow (\d+)$~', $this->input['callback'], $m):
+                $this->userPortalIssuedWgShow((int) $m[1]);
+                break;
+            case preg_match('~^/userPortalIssuedWgShowMode (\d+) (sighted|blind)$~', $this->input['callback'], $m):
+                $this->userPortalIssuedWgShowMode((int) $m[1], $m[2]);
+                break;
+            case preg_match('~^/userPortalIssuedWgShowOs (\d+) (sighted|blind) (win|mac|linux|ios|android)$~', $this->input['callback'], $m):
+                $this->userPortalIssuedWgShowOs((int) $m[1], $m[2], $m[3]);
+                break;
+            case preg_match('~^/userPortalIssuedWgGetConf (\d+) (sighted|blind) (win|mac|linux|ios|android)$~', $this->input['callback'], $m):
+                $this->userPortalIssuedWgGetConf((int) $m[1], $m[2], $m[3]);
+                break;
+            case preg_match('~^/userPortalIssuedWg(?:_(\d+))?$~', $this->input['callback'], $m):
+                $this->userPortalIssuedWg((int) ($m[1] ?? 0));
+                break;
+            case preg_match('~^/userPortalWgPick (.+?)_(\d+)$~', $this->input['callback'], $m):
+                $this->userPortalCardWg(rawurldecode($m[1]), (int) $m[2]);
+                break;
+            case preg_match('~^/userPortalWgIssue (\d+) (.+)$~', $this->input['callback'], $m):
+                $this->userPortalWgIssue((int) $m[1], rawurldecode($m[2]));
+                break;
+            case preg_match('~^/userPortalWgToggle (\d+) (.+)$~', $this->input['callback'], $m):
+                $this->userPortalWgToggle((int) $m[1], rawurldecode($m[2]));
+                break;
+            case preg_match('~^/userPortalWgSend (.+)$~', $this->input['callback'], $m):
+                $this->userPortalWgSend(rawurldecode($m[1]));
+                break;
+            case preg_match('~^/userPortalWgRevokePick (.+?)_(\d+)$~', $this->input['callback'], $m):
+                $this->userPortalWgRevokePick(rawurldecode($m[1]), (int) $m[2]);
+                break;
+            case preg_match('~^/userPortalWgRevokePick (.+)$~', $this->input['callback'], $m):
+                $this->userPortalWgRevokePick($m[1]);
+                break;
+            case preg_match('~^/userPortalWgRevokeToggle (\d+) (.+)$~', $this->input['callback'], $m):
+                $this->userPortalWgRevokeToggle((int) $m[1], rawurldecode($m[2]));
+                break;
+            case preg_match('~^/userPortalWgRevokeSend (.+)$~', $this->input['callback'], $m):
+                $this->userPortalWgRevokeSend(rawurldecode($m[1]));
+                break;
+            case preg_match('~^/userPortalWgAdd (.+)$~', $this->input['callback'], $m):
+                $this->userPortalWgAdd(rawurldecode($m[1]));
+                break;
+            case preg_match('~^/userPortalWgAddMode (full|subnet) (.+)$~', $this->input['callback'], $m):
+                $this->userPortalWgAddMode($m[1], rawurldecode($m[2]));
                 break;
             case preg_match('~^/userPortalRevokePrompt$~', $this->input['callback'], $m):
                 $this->userPortalRevokePrompt();
@@ -744,6 +860,12 @@ class Bot
                 break;
             case preg_match('~^/deloc (\d+)$~', $this->input['callback'], $m):
                 $this->deloc($m[1]);
+                break;
+            case preg_match('~^/userPortalCheck$~', $this->input['callback'], $m):
+                $this->userPortalCheck();
+                break;
+            case preg_match('~^/userPortalEmptyProto$~', $this->input['callback'], $m):
+                $this->userPortalEmptyProto();
                 break;
             case preg_match('~^/userXr (\d+)$~', $this->input['callback'], $m):
                 $this->userXr($m[1]);
@@ -2574,10 +2696,17 @@ class Bot
 
             return;
         }
+        // Сохраняем id введённого пользователем сообщения как reply-таргет, ДО
+        // того как он будет удалён ниже: итог действия должен приходить ответом
+        // (reply) на это сообщение, а не новым сообщением в пустоту.
+        $userReplyTarget = (int) $this->input['message_id'];
         $this->delete($this->input['chat'], $this->input['reply']);
         $this->delete($this->input['chat'], $this->input['message_id']);
         $callback = $_SESSION['reply'][$this->input['reply']]['callback'];
         $this->input['message_id']  = $this->input['callback_id'] = $_SESSION['reply'][$this->input['reply']]['start_message'];
+        if ($userReplyTarget > 0) {
+            $_SESSION['userPortalUi']['reply_to'] = $userReplyTarget;
+        }
         $this->{$callback}($this->input['message'], ...$_SESSION['reply'][$this->input['reply']]['args']);
         if (!empty($this->input['callback_id'])) {
             $this->answer($this->input['callback_id']);
@@ -3000,7 +3129,61 @@ class Bot
         // не должен попадать на диск и не должен отдаваться как контент.
         unset($conf['_pac_read_error']);
 
-        return file_put_contents($this->pac, json_encode($conf, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        // Портал-леджер (user_portal_bindings / user_portal_issued) меняется
+        // ТОЛЬКО под withPacLock (см. UserPortalTrait). Любой другой вызывающий
+        // setPacConf — cron (долгоживущий процесс с закешированным снимком
+        // pac.json), init, service, экшены меню — тащит в $conf ПОТЕНЦИАЛЬНО
+        // на часы устаревшую копию леджера. Запись такой копии поверх стирает
+        // людей, которые в этот промежуток нажали /start (или были одобрены) —
+        // это и есть «пользователь исчезает».
+        //
+        // Поэтому: если setPacConf вызван НЕ из-под блокировки портала — свежий
+        // леджер перечитывается с диска и подставляется вместо устаревшей копии
+        // из $conf. Если вызван из-под блокировки (портал сам пишет свежий
+        // леджер) — доверяем $conf как есть.
+        $portalAlreadyLocked = $this->pacLockDepth > 0;
+
+        return $this->withPacLock(function () use ($conf, $portalAlreadyLocked) {
+            if (!$portalAlreadyLocked) {
+                // Перечитать с ДИСКА напрямую, не из pacConfCache (он как раз
+                // мог быть устаревшим). Если диск не разобрался (пустой/битый) —
+                // не трогаем леджер в $conf, чтобы не стереть его пустым массивом.
+                $disk = json_decode((string) @file_get_contents($this->pac), true);
+                if (is_array($disk)) {
+                    $conf['user_portal_bindings'] = is_array($disk['user_portal_bindings'] ?? null)
+                        ? $disk['user_portal_bindings'] : [];
+                    if (array_key_exists('user_portal_issued', $disk)) {
+                        $conf['user_portal_issued'] = $disk['user_portal_issued'];
+                    } else {
+                        unset($conf['user_portal_issued']);
+                    }
+                }
+            }
+
+            $payload = json_encode($conf, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            if ($payload === false) {
+                return false;
+            }
+
+            // Атомарная запись: пишем во временный файл рядом с pac.json, затем
+            // rename() поверх. Читатель никогда не увидит полузаписанный JSON, даже
+            // если PHP-воркер убит посреди file_put_contents (раньше прямой записью
+            // в pac.json можно было оставить обрезанный файл).
+            $tmp = $this->pac . '.tmp.' . getmypid() . '.' . bin2hex(random_bytes(4));
+            $ok = file_put_contents($tmp, $payload, LOCK_EX);
+            if ($ok === false || $ok !== strlen($payload)) {
+                @unlink($tmp);
+
+                return false;
+            }
+            if (!@rename($tmp, $this->pac)) {
+                @unlink($tmp);
+
+                return false;
+            }
+
+            return $ok;
+        });
     }
 
     /**
@@ -3841,6 +4024,12 @@ class Bot
         }
         $c['admin'][] = $id;
         file_put_contents($file, "<?php\n\n\$c = " . var_export($c, true) . ";\n");
+        // Новый админ сразу получает параллельную одобренную запись в портале:
+        // каждый админ — ещё и пользователь. Запись без подписки, конфиг админ
+        // выдаёт себе сам через карточку.
+        if (method_exists($this, 'ensureAdminUserRecord')) {
+            $this->ensureAdminUserRecord((string) $id);
+        }
         $this->menu('config');
     }
 
@@ -5122,7 +5311,10 @@ DNS-over-HTTPS with IP:
         $clients = $this->readClients();
         $pac     = $this->getPacConf();
         if (empty($pac['wg1_show_runtime_clients'])) {
-            $clients = array_filter($clients, fn($v) => empty($v['interface']['## device_uuid'] ?? ''), ARRAY_FILTER_USE_BOTH);
+            // Скрывать только чистые runtime-устройства (есть device_uuid, нет
+            // owner_sub_id). Владельцев подписок показываем всегда — даже если у
+            // них заполнен device_uuid, иначе список конфигов выглядит пустым.
+            $clients = array_filter($clients, fn($v) => empty($v['interface']['## device_uuid'] ?? '') || !empty($v['interface']['## owner_sub_id'] ?? ''), ARRAY_FILTER_USE_BOTH);
         }
         if (!empty($clients)) {
             $all     = (int) ceil(count($clients) / $count);
@@ -8800,6 +8992,7 @@ DNS-over-HTTPS with IP:
                 'callback_data' => "/resetXrUser $i",
             ],
         ];
+
         $data[] = [
             [
                 'text'          => $this->i18n('traffic limit') . ($limBytes > 0 ? ' ✓' : ''),
@@ -8925,10 +9118,48 @@ DNS-over-HTTPS with IP:
         );
     }
 
-    /**
-     * Admin-side "Проверить" for a specific client's VLESS key: runs the same
-     * honest xray-probe as the user portal and reports works/fails + reason.
-     */
+    public function userXrLinks($i)
+    {
+        $xray   = $this->getXray();
+        $c      = $xray['inbounds'][0]['settings']['clients'][$i];
+        $pac    = $this->getPacConf();
+        $domain = $this->getDomain(empty($this->getTransportRegistryGlobal($pac)['reality']));
+        $scheme = empty($this->nginxGetTypeCert()) ? 'http' : 'https';
+        $hash   = $this->getHashBot();
+        $ownerSubId = $this->getClientSubscriptionId($c);
+
+        $text[] = "Menu -> " . $this->i18n('xray') . " -> {$c['email']} -> imports & files";
+        $text[] = "<a href='$scheme://{$domain}/pac$hash?t=cl&r=c&s={$ownerSubId}#{$c['email']}'>import://mihomo</a>";
+        if ($this->isRuntimeDeviceWgEnabled($c)) {
+            $text[] = "<a href='$scheme://{$domain}/pac$hash?t=wg&r=awg&s={$ownerSubId}#{$c['email']}'>import://amnezia wg device</a>";
+        }
+
+        $data[] = [
+            [
+                'text'    => $this->i18n('mihomo'),
+                'web_app' => ['url' => "https://{$domain}/pac$hash?t=cl&s={$ownerSubId}"]
+            ],
+        ];
+        $data[] = [
+            [
+                'text'          => $this->i18n('mihomo') . ' file',
+                'callback_data' => "/dw {$i} cl",
+            ],
+        ];
+        $data[] = [
+            [
+                'text'          => $this->i18n('back'),
+                'callback_data' => "/userXr $i",
+            ],
+        ];
+        $this->update(
+            $this->input['chat'],
+            $this->input['message_id'],
+            implode("\n", $text ?: ['...']),
+            $data ?: false,
+        );
+    }
+
     public function checkXr($i)
     {
         $this->ackCallback();
@@ -8970,48 +9201,6 @@ DNS-over-HTTPS with IP:
             $this->input['message_id'],
             implode("\n", $lines),
             $back,
-        );
-    }
-
-    public function userXrLinks($i)
-    {
-        $xray   = $this->getXray();
-        $c      = $xray['inbounds'][0]['settings']['clients'][$i];
-        $pac    = $this->getPacConf();
-        $domain = $this->getDomain(empty($this->getTransportRegistryGlobal($pac)['reality']));
-        $scheme = empty($this->nginxGetTypeCert()) ? 'http' : 'https';
-        $hash   = $this->getHashBot();
-        $ownerSubId = $this->getClientSubscriptionId($c);
-
-        $text[] = "Menu -> " . $this->i18n('xray') . " -> {$c['email']} -> imports & files";
-        $text[] = "<a href='$scheme://{$domain}/pac$hash?t=cl&r=c&s={$ownerSubId}#{$c['email']}'>import://mihomo</a>";
-        if ($this->isRuntimeDeviceWgEnabled($c)) {
-            $text[] = "<a href='$scheme://{$domain}/pac$hash?t=wg&r=awg&s={$ownerSubId}#{$c['email']}'>import://amnezia wg device</a>";
-        }
-
-        $data[] = [
-            [
-                'text'    => $this->i18n('mihomo'),
-                'web_app' => ['url' => "https://{$domain}/pac$hash?t=cl&s={$ownerSubId}"]
-            ],
-        ];
-        $data[] = [
-            [
-                'text'          => $this->i18n('mihomo') . ' file',
-                'callback_data' => "/dw {$i} cl",
-            ],
-        ];
-        $data[] = [
-            [
-                'text'          => $this->i18n('back'),
-                'callback_data' => "/userXr $i",
-            ],
-        ];
-        $this->update(
-            $this->input['chat'],
-            $this->input['message_id'],
-            implode("\n", $text ?: ['...']),
-            $data ?: false,
         );
     }
 
@@ -9196,7 +9385,14 @@ DNS-over-HTTPS with IP:
     public function broadcastSave($text)
     {
         $text = trim((string) $text);
-        $ids  = array_map('strval', array_keys($this->getUserPortalBindings()));
+        // Рассылка идёт только одобренным (approved === 1). Pending-заявки
+        // (нажал /start, но ещё не одобрен) и отклонённые её не получают.
+        $ids = [];
+        foreach ($this->getUserPortalBindings() as $tid => $rec) {
+            if ((int) ($rec['approved'] ?? 1) === 1) {
+                $ids[] = (string) $tid;
+            }
+        }
 
         if (empty($ids)) {
             $out  = $this->i18n('broadcast') . "\n" . $this->i18n('broadcast none');
@@ -9215,19 +9411,24 @@ DNS-over-HTTPS with IP:
         $body = htmlspecialchars($text, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 
         $sent   = 0;
-        $failed = 0;
+        $failed = [];
         foreach ($ids as $id) {
             $r = $this->send($id, $body);
             if (!empty($r['ok'])) {
                 $sent++;
             } else {
-                $failed++;
+                $failed[] = htmlspecialchars(
+                    $this->userPortalWriteTargetName((string) $id),
+                    ENT_QUOTES | ENT_SUBSTITUTE,
+                    'UTF-8'
+                );
             }
         }
 
         $out = $this->i18n('broadcast sent') . ': ' . $sent . '/' . count($ids);
-        if ($failed > 0) {
-            $out .= ' · ' . $this->i18n('broadcast failed') . ': ' . $failed;
+        if (!empty($failed)) {
+            $out .= ' · ' . $this->i18n('broadcast failed') . ': ' . count($failed)
+                . "\n" . $this->i18n('broadcast not delivered') . ': ' . implode(', ', $failed);
         }
         $data = [[
             ['text' => $this->i18n('back'), 'callback_data' => "/menu"],
@@ -9591,7 +9792,12 @@ DNS-over-HTTPS with IP:
         if (!empty($meta['subscription_id'])) {
             $who[] = 'sub:' . $meta['subscription_id'];
         }
-        $out = $this->i18n('support new') . ' (' . ($source === 'web' ? 'web' : 'bot') . ')';
+        $sourceLabel = match ($source) {
+            'web'         => 'web',
+            'user portal' => $this->i18n('support source portal'),
+            default       => $this->i18n('support source bot'),
+        };
+        $out = $this->i18n('support new') . ' (' . $sourceLabel . ')';
         if ($who) {
             $out .= "\n" . implode(' · ', $who);
         }
@@ -11433,6 +11639,12 @@ DNS-over-HTTPS with IP:
                 'callback_data' => '/userPortalUsers',
             ],
         ];
+        $data[] = [
+            [
+                'text'          => $this->i18n('user portal requests title'),
+                'callback_data' => '/userPortalRequests',
+            ],
+        ];
 
         $data[] = [
             [
@@ -11492,9 +11704,24 @@ DNS-over-HTTPS with IP:
                 ],
             ];
             foreach ($c['admin'] as $k => $v) {
+                if ((string) $v === (string) $owner) {
+                    continue;
+                }
+                $adminName = '';
+                $identity  = $this->resolveTelegramIdentity((string) $v);
+                if (is_array($identity)) {
+                    $adminName = trim((string) ($identity['first_name'] ?? '') . ' ' . (string) ($identity['last_name'] ?? ''));
+                    if ($adminName === '') {
+                        $username = trim((string) ($identity['username'] ?? ''));
+                        $adminName = $username !== '' ? '@' . $username : '';
+                    }
+                }
+                if ($adminName === '') {
+                    $adminName = (string) $v;
+                }
                 $data[] = [
                     [
-                        'text'          => $this->i18n('delete') . " $v",
+                        'text'          => $this->i18n('delete') . ' ' . $adminName,
                         'callback_data' => "/deladmin $v",
                     ],
                 ];
@@ -12889,10 +13116,30 @@ DNS-over-HTTPS with IP:
         }
     }
 
+    /**
+     * Гарантирует, что inline-кнопки приходят Telegram в формате массива РЯДОВ
+     * кнопок [[{...}],[{...}]]. Если вызывающий передал кнопки ошибочно одним
+     * уровнем ([{...}]), оборачиваем их в один ряд — иначе Telegram отвечает
+     * «expected an Array of InlineKeyboardButton».
+     */
+    protected function normalizeKeyboard($button)
+    {
+        if (!$button || !is_array($button)) {
+            return $button;
+        }
+        if (isset($button[0]) && is_array($button[0]) && isset($button[0][0]) && is_array($button[0][0])) {
+            return $button;
+        }
+        if (isset($button[0]) && is_array($button[0]) && array_key_exists('text', $button[0])) {
+            return [$button];
+        }
+        return $button;
+    }
+
     public function send($chat, $text, ?int $to = 0, $button = false, $reply = false, $mode = 'HTML', $disable_notification = false)
     {
         if ($button) {
-            $extra = ['inline_keyboard' => $button];
+            $extra = ['inline_keyboard' => $this->normalizeKeyboard($button)];
         }
         if (false !== $reply && empty($button)) {
             $extra = [
@@ -12996,7 +13243,7 @@ DNS-over-HTTPS with IP:
             return ['ok' => false, 'description' => 'missing chat/message_id'];
         }
         if ($button) {
-            $extra = ['inline_keyboard' => $button];
+            $extra = ['inline_keyboard' => $this->normalizeKeyboard($button)];
         }
         // editMessageText does NOT accept force_reply markup (Telegram rejects it
         // with "inline keyboard expected"). When a prompt is being edited into an
@@ -13017,6 +13264,30 @@ DNS-over-HTTPS with IP:
         if (!empty($extra)) {
             $data['reply_markup'] = json_encode($extra);
         }
+        return $this->request('editMessageText', $data);
+    }
+
+    /**
+     * Свернуть inline-кнопки у сообщения и заменить его текст. В отличие от
+     * update(..., $button=false), который НЕ передаёт reply_markup (Telegram
+     * оставляет старую клавиатуру), здесь reply_markup шлётся явно пустым
+     * inline_keyboard — кнопки исчезают. Нужен для модерации заявок: после
+     * approve/reject кнопки «Одобрить/Отклонить/Написать» должны пропасть.
+     */
+    public function collapseMessage($chat, $message_id, $text, $mode = 'HTML')
+    {
+        if ($chat === null || $chat === '' || (int) $message_id <= 0) {
+            return ['ok' => false, 'description' => 'missing chat/message_id'];
+        }
+        $data = [
+            'chat_id'                  => $chat,
+            'message_id'               => $message_id,
+            'text'                     => $text,
+            'parse_mode'               => $mode,
+            'disable_web_page_preview' => true,
+            'reply_markup'             => json_encode(['inline_keyboard' => []]),
+        ];
+
         return $this->request('editMessageText', $data);
     }
 
