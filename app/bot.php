@@ -496,6 +496,18 @@ class Bot
             case preg_match('~^/userPortalWgAddMode (full|subnet) (.+)$~', $this->input['callback'], $m):
                 $this->userPortalWgAddMode($m[1], rawurldecode($m[2]));
                 break;
+            case preg_match('~^/userPortalWgAddSelf$~', $this->input['callback'], $m):
+                $this->userPortalWgAddSelf();
+                break;
+            case preg_match('~^/userPortalWgLimit (.+)$~', $this->input['callback'], $m):
+                $this->userPortalWgLimit($m[1]);
+                break;
+            case preg_match('~^/userPortalWgGlobalLimit$~', $this->input['callback'], $m):
+                $this->userPortalWgGlobalLimit();
+                break;
+            case preg_match('~^/userPortalExpiry (.+)$~', $this->input['callback'], $m):
+                $this->userPortalExpiry($m[1]);
+                break;
             case preg_match('~^/userPortalRevokePrompt$~', $this->input['callback'], $m):
                 $this->userPortalRevokePrompt();
                 break;
@@ -1828,6 +1840,7 @@ class Bot
         while (true) {
             $this->shutdownClient();
             $this->shutdownClientXr();
+            $this->checkUserPortalExpiryReminders();
             $this->checkTrafficLimitXr();
             $this->checkVersion();
             $this->checkBackup();
@@ -11643,6 +11656,10 @@ DNS-over-HTTPS with IP:
             [
                 'text'          => $this->i18n('user portal requests title'),
                 'callback_data' => '/userPortalRequests',
+            ],
+            [
+                'text'          => $this->i18n('user portal wg limit global') . ': ' . $this->getUserPortalWgLimit(''),
+                'callback_data' => '/userPortalWgGlobalLimit',
             ],
         ];
 

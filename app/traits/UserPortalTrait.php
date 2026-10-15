@@ -30,6 +30,9 @@ trait UserPortalTrait
             'userPortalWriteToSave',
             'userPortalReplySave',
             'userPortalWgAddName',
+            'userPortalWgAddSelfName',
+            'userPortalWgLimitSave',
+            'userPortalWgGlobalLimitSave',
         ], true);
     }
 
@@ -181,6 +184,10 @@ trait UserPortalTrait
             'userPortalWriteToSave'           => $this->i18n('support placeholder'),
             'userPortalReplySave'             => $this->i18n('support placeholder'),
             'userPortalWgAddName'             => $this->i18n('user portal wg name placeholder'),
+            'userPortalWgAddSelfName'         => $this->i18n('user portal wg name placeholder'),
+            'userPortalWgLimitSave'           => $this->i18n('user portal wg limit placeholder'),
+            'userPortalWgGlobalLimitSave'     => $this->i18n('user portal wg limit placeholder'),
+            'userPortalExpirySave'            => $this->i18n('user portal expiry placeholder'),
             default                           => '',
         };
         // Промпт ввода ставит force_reply (фокус сразу на поле ввода). Telegram
@@ -261,11 +268,15 @@ trait UserPortalTrait
             $lines[] = $this->i18n('user portal account') . ': <code>' . htmlspecialchars($email, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</code>';
         }
 
-        $time = (int) ($client['time'] ?? 0);
-        if ($time > 0) {
-            $date = date('d.m.Y H:i', $time);
-            if ($time > time()) {
-                $lines[] = $this->i18n('user portal expires') . ': ' . $date . ' (' . $this->getTime($time) . ')';
+        // Единая сущность «времени»: срок кабинета (expires_at) — источник
+        // правды и для VLESS, и для Amnezia. Показываем его, а не поле
+        // VLESS-подписки, чтобы «время» в обоих местах совпадало.
+        $tgId = (string) ($session['telegram_id'] ?? '');
+        $expiresAt = $tgId !== '' ? $this->getUserPortalExpiry($tgId) : 0;
+        if ($expiresAt > 0) {
+            $date = date('d.m.Y H:i', $expiresAt);
+            if ($expiresAt > time()) {
+                $lines[] = $this->i18n('user portal expires') . ': ' . $date . ' (' . $this->getTime($expiresAt) . ')';
             } else {
                 $lines[] = $this->i18n('user portal expired') . ': ' . $date;
             }
@@ -290,15 +301,14 @@ trait UserPortalTrait
             $lines[] = $this->i18n('awg limit') . ': ' . $deviceCount . ' ' . $this->i18n('of') . ' ' . $awgLimit;
         }
 
-        // Сводка «сколько ВЫДАНО» — честные счёты от леджера user_portal_issued.
-        // Леджер инкрементится только когда админ явно жмёт «Выдать VLESS» /
-        // «Выдать Amnezia/WG» на карточке человека (см. bumpUserPortalIssued).
-        // Регистрации устройств (hwid) и WG-пиры сюда НЕ попадают — это отдельная
-        // строка «устройства» выше.
-        $ledger = $this->getUserPortalIssuedLedger();
-        $ledgerEntry = is_array($ledger[$ownerSubId] ?? null) ? $ledger[$ownerSubId] : [];
-        $issuedVless = (int) ($ledgerEntry['vless'] ?? 0);
-        $issuedWg = (int) ($ledgerEntry['wg'] ?? 0);
+        // Сводка «сколько ВЫДАНО» — от реального владения, а не от леджера
+        // user_portal_issued: леджер пишется только при явной выдаче и ключуется
+        // subscription_id, поэтому для людей без VLESS-подписки (пустой sub id)
+        // счёт Amnezia/WG расходился с реальным списком конфигов. Здесь считаем
+        // то же, что видно в списке «Мои конфиги AmneziaWG», чтобы «Вам выдано»
+        // всегда совпадало с фактом.
+        $issuedVless = $ownerSubId !== '' ? 1 : 0;
+        $issuedWg = count($this->userPortalOwnedWgClients($session));
         $lines[] = '';
         $lines[] = $this->i18n('user portal issued title') . ':';
         $lines[] = '· VLESS — ' . $issuedVless . ' ' . $this->i18n('user portal issued vless');
@@ -437,6 +447,21 @@ trait UserPortalTrait
 
                 return;
             }
+            if ($callback === 'userPortalWgAddSelfName') {
+                $this->userPortalWgAddSelfName($message, ...$args);
+
+                return;
+            }
+            if ($callback === 'userPortalWgLimitSave') {
+                $this->userPortalWgLimitSave($message, ...$args);
+
+                return;
+            }
+            if ($callback === 'userPortalExpirySave') {
+                $this->userPortalExpirySave($message, ...$args);
+
+                return;
+            }
         }
         if ($this->parseSubscriptionLink($message) !== null) {
             $this->userPortalDeleteUserMessage();
@@ -531,6 +556,9 @@ trait UserPortalTrait
                 // пишется явно как 0 (recordUserPortalSeen) или 1/2 (одобрить/отклонить).
                 'approved'        => (int) ($value['approved'] ?? 1),
                 'empty_proto'     => (int) ($value['empty_proto'] ?? 0),
+                'wg_limit'        => (int) ($value['wg_limit'] ?? 0),
+                'expires_at'      => (int) ($value['expires_at'] ?? 0),
+                'expiry_reminders'=> (array) ($value['expiry_reminders'] ?? []),
             ];
         }
         if (is_string($value) && $value !== '') {
@@ -543,6 +571,9 @@ trait UserPortalTrait
                 'name'            => '',
                 'approved'        => 1,
                 'empty_proto'     => 0,
+                'wg_limit'        => 0,
+                'expires_at'      => 0,
+                'expiry_reminders'=> [],
             ];
         }
 
@@ -555,6 +586,9 @@ trait UserPortalTrait
             'name'            => '',
             'approved'        => 1,
             'empty_proto'     => 0,
+            'wg_limit'        => 0,
+            'expires_at'      => 0,
+            'expiry_reminders'=> [],
         ];
     }
 
@@ -602,10 +636,281 @@ trait UserPortalTrait
                 'username'        => $username,
                 'name'            => $name,
                 'empty_proto'     => $prev['empty_proto'],
+                'wg_limit'        => $prev['wg_limit'],
+                'expires_at'      => $prev['expires_at'],
+                'expiry_reminders'=> $prev['expiry_reminders'],
             ];
             $pac['user_portal_bindings'] = $bindings;
             $this->setPacConf($pac);
         });
+    }
+
+    /**
+     * Лимит конфигов Amnezia/WG для пользователя: per-user override в
+     * user_portal_bindings[$telegramId]['wg_limit'] (>0), иначе глобальный
+     * дефолт из pac.json user_portal_wg_limit (по умолчанию 15). Это НЕ лимит
+     * устройств (hwid/awg в X-Ray) — это именно число владеемых WG-конфигов.
+     */
+    protected function getUserPortalWgLimit(string $telegramId): int
+    {
+        $record = self::normalizeUserPortalBinding($this->getUserPortalBindings()[$telegramId] ?? null);
+        $override = (int) ($record['wg_limit'] ?? 0);
+        if ($override > 0) {
+            return $override;
+        }
+        $pac = $this->getPacConf();
+        $global = (int) ($pac['user_portal_wg_limit'] ?? 15);
+
+        return $global > 0 ? $global : 15;
+    }
+
+    protected function setUserPortalWgLimit(string $telegramId, int $limit): void
+    {
+        $this->withPacLock(function () use ($telegramId, $limit): void {
+            $pac = $this->getPacConf();
+            $bindings = $this->getUserPortalBindings();
+            $prev = self::normalizeUserPortalBinding($bindings[$telegramId] ?? null);
+            $bindings[$telegramId] = array_merge($prev, ['wg_limit' => $limit]);
+            $pac['user_portal_bindings'] = $bindings;
+            $this->setPacConf($pac);
+        });
+    }
+
+    /**
+     * Срок жизни кабинета (unix timestamp, 0 = без ограничения). Единая сущность
+     * «времени» пользователя: пишется параллельно в X-Ray (VLESS) и во все
+     * Amnezia/WG-конфиги, а при истечении «затыкается и то и то» (cron).
+     */
+    protected function getUserPortalExpiry(string $telegramId): int
+    {
+        $record = self::normalizeUserPortalBinding($this->getUserPortalBindings()[$telegramId] ?? null);
+
+        return (int) ($record['expires_at'] ?? 0);
+    }
+
+    /**
+     * Записать срок кабинета: pac.json (expires_at + сброс напоминаний), затем
+     * каскад на X-Ray и Amnezia ВНЕ файловой блокировки pac.json — эти системы
+     * живут в своих файлах (xray.json / clients1.json / wg0.conf) и не делят
+     * лок с pac.json.
+     */
+    protected function setUserPortalExpiry(string $telegramId, int $expiresAt): void
+    {
+        $telegramId = trim($telegramId);
+        if ($telegramId === '') {
+            return;
+        }
+        $subscriptionId = '';
+        $this->withPacLock(function () use ($telegramId, $expiresAt, &$subscriptionId): void {
+            $pac = $this->getPacConf();
+            $bindings = $this->getUserPortalBindings();
+            $prev = self::normalizeUserPortalBinding($bindings[$telegramId] ?? null);
+            // Новый срок — новые вехи напоминаний (5/3/1 день) должны отработать
+            // заново относительно него.
+            $bindings[$telegramId] = array_merge($prev, [
+                'expires_at'       => $expiresAt > 0 ? $expiresAt : 0,
+                'expiry_reminders' => [],
+            ]);
+            $subscriptionId = $bindings[$telegramId]['subscription_id'];
+            $pac['user_portal_bindings'] = $bindings;
+            $this->setPacConf($pac);
+        });
+
+        if ($subscriptionId !== '') {
+            $this->setUserPortalVlessTime($subscriptionId, $expiresAt);
+        }
+        $this->setUserPortalWgTime($telegramId, $expiresAt);
+    }
+
+    /**
+     * Человекочитаемый ввод срока («30 дней», «1 месяц», «5d», дата) → unix.
+     * Возвращает 0 = снять срок, null = неверный формат. strtotime не знает
+     * русских названий единиц, поэтому подменяем их на английские перед парсом.
+     */
+    protected function parseUserPortalExpiry(string $text): ?int
+    {
+        $text = trim($text);
+        if ($text === '' || $text === '0') {
+            return 0;
+        }
+        if (preg_match('~^(без|без ограничения|бессрочно|навсегда|unlimited|none|never)$~iu', $text)) {
+            return 0;
+        }
+        $map = [
+            'секунд' => 'second', 'секунды' => 'second', 'секунда' => 'second', 'сек' => 'second',
+            'минут' => 'minute', 'минуты' => 'minute', 'минута' => 'minute', 'мин' => 'minute',
+            'часов' => 'hour', 'часа' => 'hour', 'час' => 'hour',
+            'суток' => 'day', 'сутки' => 'day', 'сутк' => 'day',
+            'дней' => 'day', 'дня' => 'day', 'день' => 'day',
+            'недель' => 'week', 'недели' => 'week', 'неделю' => 'week', 'недел' => 'week', 'нед' => 'week',
+            'месяцев' => 'month', 'месяца' => 'month', 'месяц' => 'month', 'мес' => 'month',
+            'лет' => 'year', 'года' => 'year', 'год' => 'year',
+        ];
+        $normalized = $text;
+        foreach ($map as $ru => $en) {
+            $normalized = preg_replace('~(\d+)\s*' . preg_quote($ru, '~') . '~iu', '$1 ' . $en, $normalized);
+        }
+        $ts = strtotime($normalized);
+
+        return ($ts === false || $ts <= time()) ? null : $ts;
+    }
+
+    /**
+     * Записать срок на все X-Ray-клиенты подписки (владелец + устройства) в
+     * мастер-реестр inbounds[0] (после expandXrayRegistryClients это clients_all).
+     * applyBothTransportInboundClients разнесёт `time` по транспортным inbound'ам
+     * при записи. 0/отрицательный — снять срок.
+     */
+    protected function setUserPortalVlessTime(string $subscriptionId, int $expiresAt): void
+    {
+        $subscriptionId = trim($subscriptionId);
+        if ($subscriptionId === '') {
+            return;
+        }
+        $xr = $this->getXray();
+        if (!is_array($xr['inbounds'][0]['settings']['clients'] ?? null)) {
+            return;
+        }
+        $clients = &$xr['inbounds'][0]['settings']['clients'];
+        $changed = false;
+        foreach ($clients as $i => $v) {
+            if (!is_array($v) || !$this->isSubscriptionIdMatch($v, $subscriptionId)) {
+                continue;
+            }
+            if ($expiresAt > 0) {
+                if ((int) ($v['time'] ?? 0) !== $expiresAt) {
+                    $clients[$i]['time'] = $expiresAt;
+                    $changed = true;
+                }
+            } elseif (array_key_exists('time', $v)) {
+                unset($clients[$i]['time']);
+                $changed = true;
+            }
+        }
+        if ($changed) {
+            $this->restartXray($xr, 1);
+        }
+    }
+
+    /**
+     * Записать срок на все Amnezia/WG-конфиги, которыми владеет пользователь.
+     * Зеркалит timerClient(): `## time` на interface + на парный peer (по AllowedIPs).
+     */
+    protected function setUserPortalWgTime(string $telegramId, int $expiresAt): void
+    {
+        $owned = $this->userPortalIssuedWgClientsByTg($telegramId);
+        if ($owned === []) {
+            return;
+        }
+        $clients = $this->readClients();
+        $server  = $this->readConfig();
+        $date    = $expiresAt > 0 ? date('Y-m-d H:i:s', $expiresAt) : '';
+        foreach ($owned as $item) {
+            $idx = (int) ($item['index'] ?? -1);
+            if ($idx < 0 || !is_array($clients[$idx]['interface'] ?? null)) {
+                continue;
+            }
+            $address = (string) ($clients[$idx]['interface']['Address'] ?? '');
+            if ($expiresAt > 0) {
+                $clients[$idx]['interface']['## time'] = $date;
+            } else {
+                unset($clients[$idx]['interface']['## time']);
+            }
+            if ($address === '') {
+                continue;
+            }
+            foreach ($server['peers'] as $k => $v) {
+                if (($v['AllowedIPs'] ?? '') !== $address) {
+                    continue;
+                }
+                if ($expiresAt > 0) {
+                    $server['peers'][$k]['## time'] = $date;
+                } else {
+                    unset($server['peers'][$k]['## time']);
+                }
+            }
+        }
+        $this->saveClients($clients);
+        $this->restartWG($this->createConfig($server));
+    }
+
+    /**
+     * Напоминания перед истечением кабинета: за 5/3/1 день — текст + кнопка
+     * «Поддержка» (обычный тред поддержки). Вызывается из cron() раз в 10 сек.
+     * Каждая веха шлётся ровно один раз (expiry_reminders хранит отправленные).
+     */
+    public function checkUserPortalExpiryReminders(): void
+    {
+        try {
+            $bindings = $this->getUserPortalBindings();
+            if (!is_array($bindings) || $bindings === []) {
+                return;
+            }
+            $now = time();
+            foreach ($bindings as $telegramId => $raw) {
+                $record = self::normalizeUserPortalBinding($raw);
+                $expiresAt = (int) ($record['expires_at'] ?? 0);
+                if ($expiresAt <= 0 || $expiresAt <= $now) {
+                    continue;
+                }
+                $daysLeft = (int) floor(($expiresAt - $now) / 86400);
+                if (!in_array($daysLeft, [5, 3, 1], true)) {
+                    continue;
+                }
+                $sent = $record['expiry_reminders'];
+                if (is_array($sent) && in_array($daysLeft, $sent, true)) {
+                    continue;
+                }
+                $this->send(
+                    (int) $telegramId,
+                    $this->i18n('user portal expiry reminder'),
+                    0,
+                    [[['text' => $this->i18n('user portal support title'), 'callback_data' => '/userPortalSupport']]],
+                );
+                $this->withPacLock(function () use ($telegramId, $daysLeft): void {
+                    $pac = $this->getPacConf();
+                    $bindings = $this->getUserPortalBindings();
+                    $prev = self::normalizeUserPortalBinding($bindings[$telegramId] ?? null);
+                    $sent = $prev['expiry_reminders'];
+                    $sent[] = $daysLeft;
+                    $sent = array_values(array_unique(array_map('intval', $sent)));
+                    $bindings[$telegramId] = array_merge($prev, ['expiry_reminders' => $sent]);
+                    $pac['user_portal_bindings'] = $bindings;
+                    $this->setPacConf($pac);
+                });
+            }
+        } catch (\Throwable $e) {
+            // Напоминания не должны ронять cron-цикл.
+        }
+    }
+
+    protected function userPortalExpiryText(int $expiresAt): string
+    {
+        return $expiresAt > 0 ? date('d.m.Y H:i', $expiresAt) : $this->i18n('user portal no expiry');
+    }
+
+    /**
+     * Уведомить пользователя, что ему задали/сняли срок жизни кабинета.
+     * Админу отдельного push не шлём: он сам выполняет действие и сразу видит
+     * подтверждение вспышкой на карточке. Здесь — только получатель.
+     */
+    protected function notifyUserPortalExpirySet(string $telegramId, int $expiresAt): void
+    {
+        $telegramId = trim($telegramId);
+        if ($telegramId === '' || (int) $telegramId <= 0) {
+            return;
+        }
+        if ($expiresAt > 0) {
+            $left = $expiresAt > time() ? ' (' . $this->getTime($expiresAt) . ')' : '';
+            $text = $this->i18n('user portal expiry set notify') . ' ' . date('d.m.Y H:i', $expiresAt) . $left;
+        } else {
+            $text = $this->i18n('user portal expiry unset notify');
+        }
+        try {
+            $this->send((int) $telegramId, $text, 0);
+        } catch (\Throwable $e) {
+            // Уведомление не должно ронять сохранение срока.
+        }
     }
 
     /**
@@ -640,6 +945,9 @@ trait UserPortalTrait
                 'name'            => $name !== '' ? $name : $prev['name'],
                 'approved'        => $approved,
                 'empty_proto'     => $prev['empty_proto'],
+                'wg_limit'        => $prev['wg_limit'],
+                'expires_at'      => $prev['expires_at'],
+                'expiry_reminders'=> $prev['expiry_reminders'],
             ];
             $pac['user_portal_bindings'] = $bindings;
             $this->setPacConf($pac);
@@ -1070,7 +1378,8 @@ trait UserPortalTrait
      * Контекст запроса (from/chat/message_id) временно подменяется на целевой
      * id, рендерится меню, затем восстанавливается. Сеансовая подпись
      * пользователя не затирается: у свеже-одобренного подписки ещё нет, поэтому
-     * getUserPortalSession вернёт null и покажет состояние «нет подписки».
+     * getUserPortalSession вернёт wg_only-сессию (запись approved=1) и покажет
+     * кабинет «только Амнезия» с кнопкой «Добавить конфиг».
      */
     protected function renderUserPortalAs(string $telegramId): void
     {
@@ -1186,6 +1495,9 @@ trait UserPortalTrait
                 'name'            => $name !== '' ? $name : $prev['name'],
                 'approved'        => 1,
                 'empty_proto'     => $prev['empty_proto'],
+                'wg_limit'        => $prev['wg_limit'],
+                'expires_at'      => $prev['expires_at'],
+                'expiry_reminders'=> $prev['expiry_reminders'],
             ];
             $pac['user_portal_bindings'] = $bindings;
             $this->setPacConf($pac);
@@ -1696,7 +2008,17 @@ trait UserPortalTrait
         // VLESS-зависимых строк (трафик/лимит/пароль). Вариант А из развилки.
         $wgClients = $this->userPortalIssuedWgClientsByTg($telegramId);
         if ($wgClients === []) {
-            return null;
+            // Ни подписки, ни выданных WG-конфигов. Раньше это значило «нет
+            // доступа». С self-add одобренному пользователю (запись есть,
+            // approved=1) всё равно нужен кабинет с «Добавить конфиг» — иначе
+            // он видит «нет подписки» и не может сам создать первый конфиг.
+            // Свежих/неодобренных (pending/rejected) сюда не пускаем: их держит
+            // заглушка «на рассмотрении/отклонено» в userPortalMenu().
+            $record = self::normalizeUserPortalBinding($this->getUserPortalBindings()[$telegramId] ?? null);
+            $hasRecord = (int) ($record['first_seen_at'] ?? 0) > 0 || (string) ($record['subscription_id'] ?? '') !== '';
+            if (!$hasRecord || (int) ($record['approved'] ?? 1) !== 1) {
+                return null;
+            }
         }
 
         return [
@@ -2007,6 +2329,12 @@ trait UserPortalTrait
                 $wgCount = count($this->userPortalIssuedWgClientsByTg($tgId));
                 $text[] = $this->i18n('user portal issued title') . ':';
                 $text[] = '· Amnezia/WG — ' . $wgCount . ' ' . $this->i18n('user portal issued wg');
+                $expiresAt = $tgId !== '' ? $this->getUserPortalExpiry($tgId) : 0;
+                if ($expiresAt > 0) {
+                    $text[] = $this->i18n('user portal expires') . ': ' . date('d.m.Y H:i', $expiresAt) . ' (' . $this->getTime($expiresAt) . ')';
+                } else {
+                    $text[] = $this->i18n('user portal expires') . ': ' . $this->i18n('user portal no expiry');
+                }
             } else {
                 $text = array_merge($text, $this->buildUserPortalAccountInfoLines($session));
                 $text[] = '';
@@ -2021,26 +2349,23 @@ trait UserPortalTrait
             // Без подписки кнопку «Обновить ссылку» не показываем вообще —
             // только «Поддержку» (добавляется ниже) и текст-заглушку.
         } elseif (!empty($session['wg_only'])) {
-            // Упрощённый кабинет «только Амнезия»: одна кнопка «Мои конфиги
-            // Амнезия» (если есть) — без устройств, ссылок, пароля и проверки,
-            // потому что всё это про VLESS-подписку, которой у юзера нет.
-            if ($this->userPortalIssuedWgClientsByTg((string) ($session['telegram_id'] ?? '')) !== []) {
-                $data[] = [[
-                    'text'          => $this->i18n('user portal issued wg menu'),
-                    'callback_data' => '/userPortalIssuedWg',
-                ]];
-            }
+            // Упрощённый кабинет «только Амнезия»: кнопка «Мои конфиги Амнезия»
+            // видна всегда (даже при 0 — внутри пустое состояние «можно добавить»)
+            // + «Добавить конфиг». Устройств, ссылок, пароля и проверки нет:
+            // всё это про VLESS-подписку, которой у юзера нет.
+            $data[] = [[
+                'text'          => $this->i18n('user portal issued wg menu'),
+                'callback_data' => '/userPortalIssuedWg',
+            ]];
         } else {
             $data[] = [[
-                'text'          => $this->i18n('user portal my devices'),
+                'text'          => $this->i18n('user portal my subscription vless'),
                 'callback_data' => '/userPortalDevices',
             ]];
-            if ($this->userPortalIssuedWgClients((string) $session['subscription_id']) !== []) {
-                $data[] = [[
-                    'text'          => $this->i18n('user portal issued wg menu'),
-                    'callback_data' => '/userPortalIssuedWg',
-                ]];
-            }
+            $data[] = [[
+                'text'          => $this->i18n('user portal issued wg menu'),
+                'callback_data' => '/userPortalIssuedWg',
+            ]];
             $links = $this->buildUserSubscriptionLinks($session['subscription_id']);
             $text[] = '';
             $text[] = $this->i18n('user portal new page link') . ':';
@@ -3655,8 +3980,13 @@ PROBE;
         }
         // Счётчик «сколько выдано» вместо вводящего в заблуждение «активен/не
         // активен»: человек без VLESS-подписки всё равно может владеть Amnezia/WG.
+        // Рядом — лимит конфигов Amnezia (per-user override или глобальный дефолт).
         $counts = $this->userPortalIssuedCounts($row);
-        $text[] = $this->i18n('user portal issued count') . ': VLESS ' . $counts['vless'] . ' · Amnezia ' . $counts['wg'];
+        $wgLimit = $tgId !== '' ? $this->getUserPortalWgLimit($tgId) : 0;
+        $text[] = $this->i18n('user portal issued count') . ': VLESS ' . $counts['vless'] . ' · Amnezia ' . $counts['wg'] . ($wgLimit > 0 ? ' / ' . $this->i18n('user portal wg limit') . ' ' . $wgLimit : '');
+        if ($tgId !== '') {
+            $text[] = $this->i18n('user portal expires') . ': ' . $this->userPortalExpiryText($this->getUserPortalExpiry($tgId));
+        }
 
         $data = [];
         $pending  = (int) ($row['approved'] ?? 1) === 0;
@@ -3744,6 +4074,13 @@ PROBE;
                     ];
                 }
                 $data[] = $middle;
+                $data[] = [[
+                    'text'          => $this->i18n('user portal wg limit') . ': ' . $wgLimit,
+                    'callback_data' => '/userPortalWgLimit ' . rawurlencode($canonicalKey),
+                ], [
+                    'text'          => $this->i18n('user portal expiry') . ': ' . $this->userPortalExpiryText($this->getUserPortalExpiry($tgId)),
+                    'callback_data' => '/userPortalExpiry ' . rawurlencode($canonicalKey),
+                ]];
                 $data[] = [[
                     'text'          => $this->i18n('user portal grant revoke'),
                     'callback_data' => '/userPortalCardRevoke ' . rawurlencode($canonicalKey),
@@ -4118,6 +4455,14 @@ PROBE;
         }
         [$canonicalKey, $row] = $resolved;
         $subscriptionId = (string) ($row['subscription_id'] ?? '');
+        $tgId = (string) ($row['telegram_id'] ?? '');
+        // Новая VLESS-подписка наследует срок кабинета, а не свой дефолт:
+        // «если у VLESS было 35 дней, но подписки нет, я выдал — подгоняется
+        // под кабинет». 0 тоже применяется (снимает срок — подписка «без
+        // ограничения», как и кабинет).
+        if ($tgId !== '') {
+            $this->setUserPortalVlessTime($subscriptionId, $this->getUserPortalExpiry($tgId));
+        }
         $owner = $this->resolveSubscriptionClient($subscriptionId);
         if ($owner === null) {
             $this->userPortalSetFlash('⚠️ ' . $this->i18n('user portal sub not found'));
@@ -4369,6 +4714,8 @@ PROBE;
 
         if ($telegramId !== '') {
             $this->setUserPortalBinding($telegramId, $subscriptionId);
+            // Выданная VLESS-подписка подгоняется под срок кабинета.
+            $this->setUserPortalVlessTime($subscriptionId, $this->getUserPortalExpiry($telegramId));
         }
 
         // Доставка: как в userPortalCardVless — parent-линк ретайрится в
@@ -4436,7 +4783,7 @@ PROBE;
 
         $data = [];
         if ($total === 0) {
-            $text[] = $this->i18n('user portal issued wg empty');
+            $text[] = $this->i18n('user portal issued wg empty add');
         } else {
             foreach ($slice as $i => $item) {
                 $number = $page * $perPage + $i + 1;
@@ -4465,6 +4812,11 @@ PROBE;
                 ],
             ];
         }
+
+        $data[] = [[
+            'text'          => $this->i18n('user portal wg add self'),
+            'callback_data' => '/userPortalWgAddSelf',
+        ]];
 
         $data[] = [[
             'text'          => $this->i18n('back'),
@@ -4848,6 +5200,14 @@ PROBE;
             $this->setUserPortalBinding($telegramId, $subscriptionId);
         }
         $this->saveClients($clients);
+
+        // Единая сущность «времени»: если у кабинета задан срок, свежевыданный
+        // Amnezia/WG-конфиг наследует его сразу (независимо от порядка выдачи —
+        // VLESS до Амнезии или наоборот). Без срока конфиг остаётся безлимитным.
+        $expiresAt = $this->getUserPortalExpiry($telegramId);
+        if ($expiresAt > 0) {
+            $this->setUserPortalWgTime($telegramId, $expiresAt);
+        }
 
         // Конфиг + QR не шлём: после выдачи человеку идёт одно сводное
         // уведомление «Вам выдано N конфигов», а сам набор он открывает из
@@ -5295,6 +5655,272 @@ PROBE;
         }
         $name = trim((string) $text);
         $this->userPortalWgAddCommit($key, $name, true);
+    }
+
+    /**
+     * Самообслуживание: юзер жмёт «Добавить конфиг» в кабинете и вводит имя —
+     * конфиг (полный тоннель) сразу его. Лимит — сумма выданных админом + своих,
+     * срезается в getUserPortalWgLimit. Это НЕ админ-флоу userPortalWgAdd (тот
+     * с выбором маршрутизации и мультивыбором на выдачу).
+     */
+    public function userPortalWgAddSelf()
+    {
+        $session = $this->getUserPortalSession();
+        if ($session === null) {
+            $this->ackCallback($this->i18n('user portal bind first'), true);
+            $this->userPortalMenu();
+
+            return;
+        }
+        $tgId = (string) ($session['telegram_id'] ?? '');
+        $limit = $this->getUserPortalWgLimit($tgId);
+        $total = count($this->userPortalIssuedWgClientsByTg($tgId));
+        if ($total >= $limit) {
+            $this->ackCallback(sprintf($this->i18n('user portal wg add self limit reached'), $total, $limit), true);
+
+            return;
+        }
+        $this->userPortalPromptInput(
+            $this->i18n('user portal wg add self name prompt'),
+            'userPortalWgAddSelfName',
+            [],
+        );
+    }
+
+    /**
+     * Ввод имени своего конфига (диспетчер текстового ввода, не-админ).
+     */
+    public function userPortalWgAddSelfName($text)
+    {
+        $session = $this->getUserPortalSession();
+        if ($session === null) {
+            return;
+        }
+        $tgId = (string) ($session['telegram_id'] ?? '');
+        $subscriptionId = (string) ($session['subscription_id'] ?? '');
+        $name = trim((string) $text);
+
+        $limit = $this->getUserPortalWgLimit($tgId);
+        $before = count($this->userPortalIssuedWgClientsByTg($tgId));
+        if ($before >= $limit) {
+            $this->userPortalSetFlash('⚠️ ' . sprintf($this->i18n('user portal wg add self limit reached'), $before, $limit));
+            $this->userPortalMenu();
+
+            return;
+        }
+
+        $ownerSubId = $subscriptionId !== '' ? $subscriptionId : ('tg-' . $tgId);
+        $created = $this->runInRuntimeWgContext(fn () => $this->issueNewWgProfile($ownerSubId, $name, true));
+        if ($created === null) {
+            $this->userPortalSetFlash('⚠️ ' . $this->i18n('user portal wg empty'));
+            $this->userPortalMenu();
+
+            return;
+        }
+
+        // Новый конфиг дописан последним в clients1.json — привязываем его к
+        // владельцу и сохраняем. issueWgPeerToUser уже зовёт saveClients.
+        $clients = $this->readClients();
+        $newIndex = count($clients) - 1;
+        if ($this->issueWgPeerToUser($clients, $newIndex, $tgId, $subscriptionId) === null) {
+            $this->userPortalSetFlash('⚠️ ' . $this->i18n('user portal wg empty'));
+            $this->userPortalMenu();
+
+            return;
+        }
+
+        if ($subscriptionId !== '') {
+            $this->bumpUserPortalIssued($subscriptionId, 'wg');
+        }
+        $total = count($this->userPortalIssuedWgClientsByTg($tgId));
+        $left  = max(0, $limit - $total);
+        $this->notifyAdminSelfAdd($this->userPortalWriteTargetName($tgId), $name, $total, $left);
+        $this->userPortalSetFlash('✅ ' . sprintf($this->i18n('user portal wg add self done'), $name));
+        $this->userPortalMenu();
+    }
+
+    /**
+     * Пуш остальным админам «юзер сам добавил себе конфиг». Формат-шаблон в
+     * i18n: «Имя: себе добавлен конфиг "имя" — всего N, осталось M».
+     */
+    protected function notifyAdminSelfAdd(string $who, string $name, int $total, int $left): void
+    {
+        $configFile = dirname(__DIR__) . '/config.php';
+        if (!is_file($configFile)) {
+            return;
+        }
+        $c = [];
+        require $configFile;
+        $admins = isset($c['admin']) && is_array($c['admin']) ? $c['admin'] : [];
+        $silent = isset($c['admin_silent']) && is_array($c['admin_silent']) ? $c['admin_silent'] : [];
+        if ($silent !== []) {
+            $silentMap = array_map('strval', $silent);
+            $admins = array_values(array_filter($admins, static function ($id) use ($silentMap) {
+                return !in_array((string) $id, $silentMap, true);
+            }));
+        }
+        if ($admins === []) {
+            return;
+        }
+        $actingId = (string) ($this->input['from'] ?? '');
+        $text = '🔔 ' . sprintf($this->i18n('user portal wg add self admin notify'), $who, $name, $total, $left);
+        foreach ($admins as $adminId) {
+            $adminId = (string) $adminId;
+            if ($adminId === '' || $adminId === $actingId) {
+                continue;
+            }
+            try {
+                $this->send($adminId, $text);
+            } catch (\Throwable $e) {
+                // Неудачная рассылка одному админу не должна ломать портал.
+            }
+        }
+    }
+
+    /**
+     * Кнопка «Лимит Amnezia» в карточке пользователя: админ задаёт per-user
+     * лимит конфигов Amnezia/WG. 0 = «как у всех» (глобальный дефолт).
+     */
+    public function userPortalWgLimit(string $key)
+    {
+        if (!$this->admin) {
+            return;
+        }
+        $key = rawurldecode($key);
+        $resolved = $this->resolveUserPortalCardRow($key);
+        if ($resolved === null || (string) ($resolved[1]['telegram_id'] ?? '') === '') {
+            $this->userPortalSetFlash('⚠️ ' . $this->i18n('user portal bind first'));
+            $this->userPortalUsers();
+
+            return;
+        }
+        [$canonicalKey, $row] = $resolved;
+        $tgId = (string) ($row['telegram_id'] ?? '');
+        $current = $this->getUserPortalWgLimit($tgId);
+        $this->userPortalPromptInput(
+            $this->i18n('user portal wg limit prompt') . "\n" . $this->i18n('user portal wg limit') . ': ' . $current,
+            'userPortalWgLimitSave',
+            [rawurlencode($canonicalKey)],
+        );
+    }
+
+    /**
+     * Сохранение per-user лимита (диспетчер текстового ввода, админ).
+     */
+    public function userPortalWgLimitSave($text, string $key)
+    {
+        if (!$this->admin) {
+            return;
+        }
+        $key = rawurldecode($key);
+        $resolved = $this->resolveUserPortalCardRow($key);
+        if ($resolved === null || (string) ($resolved[1]['telegram_id'] ?? '') === '') {
+            $this->userPortalSetFlash('⚠️ ' . $this->i18n('user portal bind first'));
+            $this->userPortalUsers();
+
+            return;
+        }
+        [$canonicalKey, $row] = $resolved;
+        $tgId = (string) ($row['telegram_id'] ?? '');
+        $limit = (int) trim((string) $text);
+        if ($limit < 0) {
+            $limit = 0;
+        }
+        $this->setUserPortalWgLimit($tgId, $limit);
+        $this->userPortalSetFlash('✅ ' . $this->i18n('user portal wg limit') . ': ' . $this->getUserPortalWgLimit($tgId));
+        $this->userPortalCard($canonicalKey);
+    }
+
+    /**
+     * Кнопка «Время» в карточке пользователя: админ задаёт срок жизни кабинета.
+     * Единый срок пишется параллельно в X-Ray (VLESS) и все Amnezia/WG-конфиги.
+     */
+    public function userPortalExpiry(string $key)
+    {
+        if (!$this->admin) {
+            return;
+        }
+        $key = rawurldecode($key);
+        $resolved = $this->resolveUserPortalCardRow($key);
+        if ($resolved === null || (string) ($resolved[1]['telegram_id'] ?? '') === '') {
+            $this->userPortalSetFlash('⚠️ ' . $this->i18n('user portal bind first'));
+            $this->userPortalUsers();
+
+            return;
+        }
+        [$canonicalKey, $row] = $resolved;
+        $tgId = (string) ($row['telegram_id'] ?? '');
+        $current = $this->getUserPortalExpiry($tgId);
+        $this->userPortalPromptInput(
+            $this->i18n('user portal expiry prompt') . "\n" . $this->i18n('user portal expires') . ': ' . $this->userPortalExpiryText($current),
+            'userPortalExpirySave',
+            [rawurlencode($canonicalKey)],
+        );
+    }
+
+    /**
+     * Сохранение срока кабинета (диспетчер текстового ввода, админ).
+     */
+    public function userPortalExpirySave($text, string $key)
+    {
+        if (!$this->admin) {
+            return;
+        }
+        $key = rawurldecode($key);
+        $resolved = $this->resolveUserPortalCardRow($key);
+        if ($resolved === null || (string) ($resolved[1]['telegram_id'] ?? '') === '') {
+            $this->userPortalSetFlash('⚠️ ' . $this->i18n('user portal bind first'));
+            $this->userPortalUsers();
+
+            return;
+        }
+        [$canonicalKey, $row] = $resolved;
+        $tgId = (string) ($row['telegram_id'] ?? '');
+        $parsed = $this->parseUserPortalExpiry((string) $text);
+        if ($parsed === null) {
+            $this->userPortalSetFlash('⚠️ ' . $this->i18n('user portal expiry bad format'));
+            $this->userPortalExpiry($canonicalKey);
+
+            return;
+        }
+        $this->setUserPortalExpiry($tgId, $parsed);
+        $this->notifyUserPortalExpirySet($tgId, $parsed);
+        $this->userPortalSetFlash('✅ ' . $this->i18n('user portal expires') . ': ' . $this->userPortalExpiryText($this->getUserPortalExpiry($tgId)));
+        $this->userPortalCard($canonicalKey);
+    }
+
+    /**
+     * Глобальный (общий) лимит WG-конфигов из настроек админа. Промпт числа.
+     */
+    public function userPortalWgGlobalLimit()
+    {
+        if (!$this->admin) {
+            return;
+        }
+        $current = $this->getUserPortalWgLimit('');
+        $this->userPortalPromptInput(
+            $this->i18n('user portal wg limit global prompt') . "\n" . $this->i18n('user portal wg limit global') . ': ' . $current,
+            'userPortalWgGlobalLimitSave',
+            [],
+        );
+    }
+
+    /**
+     * Сохранение глобального лимита в pac.json (диспетчер текстового ввода, админ).
+     */
+    public function userPortalWgGlobalLimitSave($text)
+    {
+        if (!$this->admin) {
+            return;
+        }
+        $limit = (int) trim((string) $text);
+        if ($limit < 0) {
+            $limit = 0;
+        }
+        $pac = $this->getPacConf();
+        $pac['user_portal_wg_limit'] = $limit;
+        $this->setPacConf($pac);
+        $this->menu('config');
     }
 
     /**

@@ -889,6 +889,50 @@ $i = [
         'en' => 'No Amnezia/WG configs issued yet.',
         'ru' => 'Конфиги AmneziaWG пока не выданы.',
     ],
+    'user portal issued wg empty add' => [
+        'en' => 'No Amnezia/WG configs yet — you can add one.',
+        'ru' => 'Конфигов AmneziaWG пока нет — можно добавить.',
+    ],
+    'user portal wg add self' => [
+        'en' => 'Add config',
+        'ru' => 'Добавить конфиг',
+    ],
+    'user portal wg add self name prompt' => [
+        'en' => 'Enter a name for your Amnezia/WG config:',
+        'ru' => 'Введи имя своего Amnezia/WG-конфига:',
+    ],
+    'user portal wg add self done' => [
+        'en' => 'Config «%s» created — it is already yours.',
+        'ru' => 'Конфиг «%s» создан — он уже твой.',
+    ],
+    'user portal wg add self limit reached' => [
+        'en' => 'Limit reached: %d of %d configs.',
+        'ru' => 'Лимит исчерпан: %d из %d конфигов.',
+    ],
+    'user portal wg add self admin notify' => [
+        'en' => '%s added a config for themselves «%s» — total %d, left %d',
+        'ru' => '%s: себе добавлен конфиг «%s» — всего %d, осталось %d',
+    ],
+    'user portal wg limit' => [
+        'en' => 'Amnezia limit',
+        'ru' => 'Лимит Amnezia',
+    ],
+    'user portal wg limit prompt' => [
+        'en' => 'Enter the Amnezia/WG config limit for this user (0 — global default):',
+        'ru' => 'Введи лимит конфигов Amnezia/WG для этого пользователя (0 — как у всех по умолчанию):',
+    ],
+    'user portal wg limit placeholder' => [
+        'en' => 'number',
+        'ru' => 'число',
+    ],
+    'user portal wg limit global' => [
+        'en' => 'Global Amnezia limit',
+        'ru' => 'Лимит Amnezia (общий)',
+    ],
+    'user portal wg limit global prompt' => [
+        'en' => 'Enter the global Amnezia/WG config limit:',
+        'ru' => 'Введи общий лимит конфигов Amnezia/WG:',
+    ],
     'user portal issued wg show' => [
         'en' => 'Show',
         'ru' => 'Показать',
@@ -1081,6 +1125,10 @@ $i = [
         'en' => 'My devices',
         'ru' => 'Мои устройства',
     ],
+    'user portal my subscription vless' => [
+        'en' => 'VLESS subscription',
+        'ru' => 'Подписка VLESS',
+    ],
     'user portal logout' => [
         'en' => 'Unlink account',
         'ru' => 'Отвязать аккаунт',
@@ -1128,6 +1176,34 @@ $i = [
     'user portal no expiry' => [
         'en' => 'no limit',
         'ru' => 'без ограничения',
+    ],
+    'user portal expiry' => [
+        'en' => 'Expiry',
+        'ru' => 'Время',
+    ],
+    'user portal expiry prompt' => [
+        'en' => 'Enter the cabinet lifetime (e.g. "30 days", "5 days", "1 month"; "0" or "без" to unset):',
+        'ru' => 'Введи срок жизни кабинета (например «30 дней», «5 дней», «1 месяц»; «0» или «без» — снять):',
+    ],
+    'user portal expiry placeholder' => [
+        'en' => 'e.g. 30 days',
+        'ru' => 'например «30 дней»',
+    ],
+    'user portal expiry reminder' => [
+        'en' => 'Your subscription is expiring, please contact support to renew.',
+        'ru' => 'Ваша подписка истекает, пожалуйста, свяжитесь с поддержкой для оплаты',
+    ],
+    'user portal expiry bad format' => [
+        'en' => 'Could not parse the expiry. Use e.g. "30 days" or a date.',
+        'ru' => 'Не понял срок. Введи, например, «30 дней» или дату.',
+    ],
+    'user portal expiry set notify' => [
+        'en' => 'Your subscription lifetime has been set:',
+        'ru' => 'Вам установлен срок действия подписки:',
+    ],
+    'user portal expiry unset notify' => [
+        'en' => 'Your subscription lifetime has been removed — unlimited.',
+        'ru' => 'Срок действия вашей подписки снят — без ограничения',
     ],
     'user portal traffic' => [
         'en' => 'Traffic used',
