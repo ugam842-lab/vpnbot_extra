@@ -55,11 +55,6 @@ trait TransportRuntimeTrait
         $hash = $this->getHashBot();
         $name = (string) ($c['proxies'][$index]['name'] ?? 'proxy');
         if (!empty($flags['reality'])) {
-            // Reality runs over XHTTP on the server (network=xhttp in
-            // buildXrayInboundsByRegistry). The Clash/mihomo reality proxy must
-            // match that: network=xhttp + reality-opts + tls, and NO flow —
-            // xtls-rprx-vision is TCP-only and makes the server reject the
-            // handshake (XHTTP+Reality handshake carries no Vision flow).
             $c['proxies'][$index] = array_merge($c['proxies'][$index], [
                 'type' => 'vless',
                 'server' => $realityServerHost !== '' ? $realityServerHost : $domain,
@@ -420,6 +415,7 @@ NGINX;
     server {
         listen          443 udp reuseport;
         proxy_pass      hysteria;
+
     }
 NGINX;
         $fallbackUdp = <<<'NGINX'
@@ -427,6 +423,7 @@ NGINX;
     server {
         listen          443 udp reuseport;
         proxy_pass      other;
+
     }
 NGINX;
         $pattern = '~\n\s*server\s*\{[^{}]*listen\s+443\s+udp[^{}]*\}\s*~s';

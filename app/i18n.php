@@ -641,6 +641,62 @@ $i = [
         'en' => 'You have no active subscription. Write to support — we\'ll sort it out.',
         'ru' => 'У вас нет активной подписки. Напишите в поддержку — разберёмся.',
     ],
+    'user portal pending' => [
+        'en' => 'Your request is under review. You will be notified once your personal account is approved.',
+        'ru' => 'Заявка на рассмотрении. Как только ваш личный кабинет одобрят, вам придёт уведомление.',
+    ],
+    'user portal half approved' => [
+        'en' => 'You have a half-approved cabinet: the MTProto link is already issued.',
+        'ru' => 'У вас полуодобренный кабинет: MTProto-ссылка уже выдана.',
+    ],
+    'user portal approved' => [
+        'en' => 'Approved',
+        'ru' => 'Одобрено',
+    ],
+    'user portal approved msg' => [
+        'en' => 'Your personal account has been approved.',
+        'ru' => 'Ваш личный кабинет одобрен.',
+    ],
+    'user portal rejected' => [
+        'en' => 'Rejected',
+        'ru' => 'Отклонено',
+    ],
+    'user portal rejected msg' => [
+        'en' => 'Your request has been declined.',
+        'ru' => 'Ваша заявка отклонена.',
+    ],
+    'user portal rejected pending' => [
+        'en' => 'Your request was declined. If this is a mistake, contact support.',
+        'ru' => 'Ваша заявка отклонена. Если это ошибка — напишите в поддержку.',
+    ],
+    'user portal restore' => [
+        'en' => 'Restore',
+        'ru' => 'Вернуть',
+    ],
+    'user portal restored msg' => [
+        'en' => 'Your request is back under review.',
+        'ru' => 'Ваша заявка возвращена на рассмотрение.',
+    ],
+    'user portal write prompt' => [
+        'en' => 'Write a message to this user',
+        'ru' => 'Напишите сообщение этому пользователю',
+    ],
+    'user portal write sent' => [
+        'en' => 'Message sent.',
+        'ru' => 'Сообщение отправлено.',
+    ],
+    'user portal write failed' => [
+        'en' => 'Could not send the message.',
+        'ru' => 'Не удалось отправить сообщение.',
+    ],
+    'user portal revoke wg' => [
+        'en' => 'Revoke config',
+        'ru' => 'Отозвать конфиг',
+    ],
+    'user portal revoked wg msg' => [
+        'en' => 'Your Amnezia/WG config has been revoked:',
+        'ru' => 'Ваш конфиг Amnezia/WG отозван:',
+    ],
     'user portal grant title' => [
         'en' => 'Portal by Telegram ID',
         'ru' => 'Портал по Telegram ID',
@@ -689,6 +745,18 @@ $i = [
         'en' => 'No portal users yet.',
         'ru' => 'Пользователей портала пока нет.',
     ],
+    'user portal requests title' => [
+        'en' => 'Requests',
+        'ru' => 'Заявки',
+    ],
+    'user portal requests empty' => [
+        'en' => 'No pending requests.',
+        'ru' => 'Нет необработанных заявок.',
+    ],
+    'user portal page' => [
+        'en' => 'Page',
+        'ru' => 'Страница',
+    ],
     'user portal activated' => [
         'en' => 'active',
         'ru' => 'активен',
@@ -709,6 +777,14 @@ $i = [
         'en' => 'Now send the subscription ID.',
         'ru' => 'Теперь пришлите ID подписки.',
     ],
+    'user portal pick sub' => [
+        'en' => 'Choose a subscription to grant:',
+        'ru' => 'Выберите подписку для выдачи:',
+    ],
+    'user portal no subs' => [
+        'en' => 'No active subscriptions to grant.',
+        'ru' => 'Нет активных подписок для выдачи.',
+    ],
     'user portal sub not found' => [
         'en' => 'Subscription not found.',
         'ru' => 'Подписка не найдена.',
@@ -725,17 +801,49 @@ $i = [
         'en' => 'Access revoked.',
         'ru' => 'Доступ отозван.',
     ],
+    'user portal delete user' => [
+        'en' => 'Delete user',
+        'ru' => 'Удалить пользователя',
+    ],
+    'user portal view as user' => [
+        'en' => 'View as user',
+        'ru' => 'Перейти как пользователь',
+    ],
+    'user portal back to admin' => [
+        'en' => 'Back to admin panel',
+        'ru' => 'Перейти в админку',
+    ],
+    'user portal cannot delete self' => [
+        'en' => 'You cannot delete yourself.',
+        'ru' => 'Себя удалить нельзя.',
+    ],
+    'user portal deleted ok' => [
+        'en' => 'User deleted.',
+        'ru' => 'Пользователь удалён.',
+    ],
+    'user portal deleted msg' => [
+        'en' => 'Your account has been deleted.',
+        'ru' => 'Ваш аккаунт удалён.',
+    ],
+    'user portal revoked vless msg' => [
+        'en' => 'Your VLESS subscription has been revoked.',
+        'ru' => 'Ваша VLESS-подписка отозвана.',
+    ],
     'user portal status' => [
         'en' => 'Status',
         'ru' => 'Статус',
+    ],
+    'user portal issued count' => [
+        'en' => 'Issued',
+        'ru' => 'Выдано',
     ],
     'user portal bind subject' => [
         'en' => 'Bind subscription',
         'ru' => 'Привязать подписку',
     ],
     'user portal issue vless' => [
-        'en' => 'Issue VLESS',
-        'ru' => 'Выдать VLESS',
+        'en' => 'Issue subscription',
+        'ru' => 'Выдать подписку',
     ],
     'user portal issue wg' => [
         'en' => 'Issue Amnezia/WG',
@@ -749,9 +857,17 @@ $i = [
         'en' => 'Config delivered',
         'ru' => 'Конфиг доставлен',
     ],
+    'user portal wg config created' => [
+        'en' => 'Config created — marked for sending',
+        'ru' => 'Конфиг создан — отмечен для отправки',
+    ],
     'user portal wg amnezia link' => [
         'en' => 'Amnezia/WG link',
         'ru' => 'Ссылка Amnezia/WG',
+    ],
+    'user portal amnezia instructions' => [
+        'en' => "Installation\n\nAmneziaVPN:\nAll platforms — https://amnezia.org/downloads\nMirror if the site is unavailable — https://storage.googleapis.com/amnezia/amnezia.org\nGoogle Play — https://play.google.com/store/apps/details?id=org.amnezia.vpn\n\nAmneziaWG:\nAndroid — https://play.google.com/store/apps/details?id=org.amnezia.awg\niOS and macOS — https://apps.apple.com/app/amneziawg/id6478942365\nWindows — https://github.com/amnezia-vpn/amneziawg-windows-client/releases/latest\nLinux — https://github.com/amnezia-vpn/amneziawg-tools/releases",
+        'ru' => "Установка\n\nAmneziaVPN:\nВсе платформы — https://amnezia.org/downloads\nЗеркало, если сайт недоступен — https://storage.googleapis.com/amnezia/amnezia.org\nGoogle Play — https://play.google.com/store/apps/details?id=org.amnezia.vpn\n\nAmneziaWG:\nAndroid — https://play.google.com/store/apps/details?id=org.amnezia.awg\niOS и macOS — https://apps.apple.com/app/amneziawg/id6478942365\nWindows — https://github.com/amnezia-vpn/amneziawg-windows-client/releases/latest\nLinux — https://github.com/amnezia-vpn/amneziawg-tools/releases",
     ],
     'user portal issued title' => [
         'en' => 'Issued to you',
@@ -764,6 +880,170 @@ $i = [
     'user portal issued wg' => [
         'en' => 'Amnezia/WG configs',
         'ru' => 'конфигов Amnezia/WG',
+    ],
+    'user portal issued wg menu' => [
+        'en' => 'My Amnezia/WG configs',
+        'ru' => 'Мои конфиги AmneziaWG',
+    ],
+    'user portal issued wg empty' => [
+        'en' => 'No Amnezia/WG configs issued yet.',
+        'ru' => 'Конфиги AmneziaWG пока не выданы.',
+    ],
+    'user portal issued wg show' => [
+        'en' => 'Show',
+        'ru' => 'Показать',
+    ],
+    'user portal show mode title' => [
+        'en' => 'How would you like to connect?',
+        'ru' => 'Как тебе удобнее подключиться?',
+    ],
+    'user portal show mode sighted' => [
+        'en' => 'Instructions for sighted users',
+        'ru' => 'Инструкция для зрячих',
+    ],
+    'user portal show mode blind' => [
+        'en' => 'Instructions for blind users',
+        'ru' => 'Инструкция для незрячих',
+    ],
+    'user portal show os title' => [
+        'en' => 'Choose your operating system',
+        'ru' => 'Выбери операционную систему',
+    ],
+    'user portal show os win' => [
+        'en' => 'Windows',
+        'ru' => 'Windows',
+    ],
+    'user portal show os mac' => [
+        'en' => 'macOS',
+        'ru' => 'macOS',
+    ],
+    'user portal show os linux' => [
+        'en' => 'Linux',
+        'ru' => 'Linux',
+    ],
+    'user portal show os ios' => [
+        'en' => 'iOS',
+        'ru' => 'iOS',
+    ],
+    'user portal show os android' => [
+        'en' => 'Android',
+        'ru' => 'Android',
+    ],
+    'user portal show rename rule' => [
+        'en' => "<b>Important</b> — don't rename the <code>.conf</code> file. If Telegram or the browser added «(1)» to the name, open it as is. Don't edit its contents either.",
+        'ru' => '<b>Железное правило</b> — не переименовывай файл <code>.conf</code>. Если Telegram или браузер добавил к имени «(1)», открывай как есть. Содержимое файла тоже не меняй.',
+    ],
+    'user portal show download' => [
+        'en' => 'Download',
+        'ru' => 'Скачать',
+    ],
+    'user portal show get conf' => [
+        'en' => 'Get config',
+        'ru' => 'Получить конфиг',
+    ],
+    'user portal show ins sighted win' => [
+        'en' => "<b>Client — AmneziaWG</b>\n\n1. Press <b>Download 1</b> below — the installer (<code>.exe</code>) downloads.\n2. Run it and confirm the install.\n3. Press <b>Get config</b> — the <code>.conf</code> file arrives.\n4. Open <b>AmneziaWG</b> → <b>Add Tunnel</b> → <b>Import from file</b>.\n5. Pick the <code>.conf</code> file you received.\n6. Press <b>Activate</b> to connect.",
+        'ru' => "<b>Клиент — AmneziaWG</b>\n\n1. Нажми кнопку <b>Скачать 1</b> ниже — скачается установщик (файл <code>.exe</code>).\n2. Запусти его и подтверди установку.\n3. Нажми <b>Получить конфиг</b> — придёт файл <code>.conf</code>.\n4. Открой <b>AmneziaWG</b> → <b>Добавить туннель</b> → <b>Импорт из файла</b>.\n5. Выбери присланный файл <code>.conf</code>.\n6. Нажми <b>Подключить</b> — туннель включится.",
+    ],
+    'user portal show ins sighted mac' => [
+        'en' => "<b>Client — AmneziaWG</b> (App Store)\n\n1. Press <b>Download 1</b> below — the App Store page opens.\n2. Press <b>Get config</b> — the <code>.conf</code> file arrives.\n3. Open <b>AmneziaWG</b> → <b>Add Tunnel</b> → <b>Import from file</b>.\n4. Pick the <code>.conf</code> file you received.\n5. Press <b>Activate</b>.",
+        'ru' => "<b>Клиент — AmneziaWG</b> (App Store)\n\n1. Нажми кнопку <b>Скачать 1</b> ниже — откроется страница в App Store.\n2. Нажми <b>Получить конфиг</b> — придёт файл <code>.conf</code>.\n3. Открой <b>AmneziaWG</b> → <b>Добавить туннель</b> → <b>Импорт из файла</b>.\n4. Выбери присланный файл <code>.conf</code>.\n5. Нажми <b>Подключить</b>.",
+    ],
+    'user portal show ins sighted linux' => [
+        'en' => "<b>Client — AmneziaWG</b> (terminal)\n\nLinux has no GUI — connect from the command line.\n\n1. Press <b>Download 1</b> below — the tools page opens.\n2. Press <b>Get config</b> — the <code>.conf</code> file arrives.\n3. Connect: <code>awg-quick up path/to/file.conf</code>.\n4. Disconnect: <code>awg-quick down path/to/file.conf</code>.",
+        'ru' => "<b>Клиент — AmneziaWG</b> (терминал)\n\nПод Linux графики нет — подключение через команду.\n\n1. Нажми кнопку <b>Скачать 1</b> ниже — откроется страница с инструментами.\n2. Нажми <b>Получить конфиг</b> — придёт файл <code>.conf</code>.\n3. Подключи: <code>awg-quick up путь/к/файлу.conf</code>.\n4. Отключение: <code>awg-quick down путь/к/файлу.conf</code>.",
+    ],
+    'user portal show ins sighted ios' => [
+        'en' => "<b>Client — AmneziaWG or AmneziaVPN</b>\n\n1. Install the client with a button below — <b>AmneziaWG</b> or <b>AmneziaVPN</b> from the App Store.\n2. Press <b>Get config</b> — the <code>.conf</code> file and two QR codes arrive.\n3. <b>AmneziaWG</b>: open the <code>.conf</code> file → <b>Share</b> → <b>AmneziaWG</b>, or scan the first QR code.\n4. <b>AmneziaVPN</b>: scan the second QR code (vpn://).\n5. Allow the VPN configuration and turn the tunnel on.\n\nAmneziaVPN is hidden in the Russian App Store — if you don't see it, install DefaultVPN from the App Store or change your region.",
+        'ru' => "<b>Клиент — AmneziaWG или AmneziaVPN</b>\n\n1. Поставь клиент кнопкой ниже — <b>AmneziaWG</b> или <b>AmneziaVPN</b> из App Store.\n2. Нажми <b>Получить конфиг</b> — придёт файл <code>.conf</code> и два QR-кода.\n3. <b>AmneziaWG</b>: открой файл <code>.conf</code> → <b>Поделиться</b> → <b>AmneziaWG</b>, либо отсканируй первый QR.\n4. <b>AmneziaVPN</b>: отсканируй второй QR (vpn://).\n5. Разреши добавление VPN-конфигурации и включи туннель.\n\nAmneziaVPN в российском App Store скрыт — если не виден, поставь DefaultVPN из App Store или смени регион.",
+    ],
+    'user portal show ins sighted android' => [
+        'en' => "<b>Client — AmneziaWG or AmneziaVPN</b> — both work on Android, pick one.\n\n1. Install the client with a button below: <b>AmneziaWG</b> (Play or APK) or <b>AmneziaVPN</b> (Play or APK).\n2. Press <b>Get config</b> — the <code>.conf</code> file and two QR codes arrive.\n3. <b>AmneziaWG</b>: tap <b>+</b> → import the <code>.conf</code> file or scan the first QR code.\n4. <b>AmneziaVPN</b>: tap <b>+</b> → <b>Insert key</b> and paste it, or scan the second QR code (vpn://).\n5. Turn the tunnel on with the toggle.",
+        'ru' => "<b>Клиент — AmneziaWG или AmneziaVPN</b> — под Android подходят оба, выбери один.\n\n1. Поставь клиент кнопкой ниже: <b>AmneziaWG</b> (Play или APK) или <b>AmneziaVPN</b> (Play или APK).\n2. Нажми <b>Получить конфиг</b> — придёт файл <code>.conf</code> и два QR-кода.\n3. <b>AmneziaWG</b>: нажми <b>+</b> → импортируй файл <code>.conf</code> или отсканируй первый QR-код.\n4. <b>AmneziaVPN</b>: нажми <b>+</b> → <b>Вставить ключ</b> и вставь его, либо отсканируй второй QR-код (vpn://).\n5. Включи туннель переключателем.",
+    ],
+    'user portal show ins blind win' => [
+        'en' => "<b>Client — AmneziaWG</b>. Use only this one: the full AmneziaVPN app has a combo interface that screen readers handle poorly.\n\n1. Press <b>Download 1</b> below — the installer downloads, then install it.\n2. Press <b>Get config</b> — the <code>.conf</code> file arrives.\n3. Open <b>AmneziaWG</b>. Import a tunnel: press <b>Ctrl+O</b> (English layout) — a file picker opens.\n4. Pick the <code>.conf</code> file and press <b>Enter</b>.\n5. To connect: <b>Tab</b> to the list, select the tunnel with arrows, then activate <b>Activate</b> with <b>Space</b>.",
+        'ru' => "<b>Клиент — AmneziaWG</b>. Ставим только его: у полного приложения AmneziaVPN интерфейс-комбайн, скринридер озвучивает его плохо.\n\n1. Нажми кнопку <b>Скачать 1</b> ниже — скачается установщик, установи его.\n2. Нажми <b>Получить конфиг</b> — придёт файл <code>.conf</code>.\n3. Открой <b>AmneziaWG</b>. Импорт туннеля: нажми <b>Ctrl+O</b> (английская раскладка) — откроется окно выбора файла.\n4. Выбери присланный файл <code>.conf</code> и нажми <b>Enter</b>.\n5. Включение: клавишей <b>Tab</b> дойди до списка, выбери туннель стрелками, затем активируй кнопку <b>Подключить</b> (Activate) — <b>Пробел</b>.",
+    ],
+    'user portal show ins blind mac' => [
+        'en' => "<b>Client — AmneziaWG</b> (App Store)\n\n1. Press <b>Download 1</b> below — the App Store page opens.\n2. Press <b>Get config</b> — the <code>.conf</code> file arrives.\n3. Open <b>AmneziaWG</b> → <b>File</b> menu → <b>Import tunnels from file</b>.\n4. Pick the <code>.conf</code> file you received.\n5. To connect: find the tunnel and activate <b>Activate</b> — VoiceOver will announce it.",
+        'ru' => "<b>Клиент — AmneziaWG</b> (App Store)\n\n1. Нажми кнопку <b>Скачать 1</b> ниже — откроется страница в App Store.\n2. Нажми <b>Получить конфиг</b> — придёт файл <code>.conf</code>.\n3. Открой <b>AmneziaWG</b> → меню <b>Файл</b> → <b>Импорт туннелей из файла</b>.\n4. Выбери присланный файл <code>.conf</code>.\n5. Включение: найди туннель в списке и активируй <b>Подключить</b> — VoiceOver озвучит.",
+    ],
+    'user portal show ins blind linux' => [
+        'en' => "<b>Client — AmneziaWG</b> (terminal)\n\nLinux has no GUI — connect from the terminal (works well with the Orca screen reader).\n\n1. Press <b>Download 1</b> below — the tools page opens.\n2. Press <b>Get config</b> — the <code>.conf</code> file arrives.\n3. Connect: <code>awg-quick up path/to/file.conf</code>.",
+        'ru' => "<b>Клиент — AmneziaWG</b> (терминал)\n\nПод Linux графики нет — подключение через команду в терминале (хорошо работает с экранным доступом Orca).\n\n1. Нажми кнопку <b>Скачать 1</b> ниже — откроется страница с инструментами.\n2. Нажми <b>Получить конфиг</b> — придёт файл <code>.conf</code>.\n3. Подключи: <code>awg-quick up путь/к/файлу.conf</code>.",
+    ],
+    'user portal show ins blind ios' => [
+        'en' => "<b>Client — AmneziaWG</b> (App Store)\n\n1. Press <b>AmneziaWG — App Store</b> below — the App Store page opens.\n2. Press <b>Get config</b> — the <code>.conf</code> file arrives.\n3. Open <b>AmneziaWG</b> → top-right <b>Add</b>.\n4. Choose <b>Create from file or archive</b>.\n5. «Files» opens — pick the <code>.conf</code> file you received.\n6. Confirm the VPN configuration (your device passcode is needed).\n7. To connect: find the tunnel and swipe right on the row — VoiceOver will announce the toggle.",
+        'ru' => "<b>Клиент — AmneziaWG</b> (App Store, есть и в российском сторе)\n\n1. Нажми кнопку <b>AmneziaWG — App Store</b> ниже — откроется страница в App Store.\n2. Нажми <b>Получить конфиг</b> — придёт файл <code>.conf</code>.\n3. Открой <b>AmneziaWG</b> → справа сверху <b>Добавить</b> (Add).\n4. Выбери <b>Создать из файла или архива</b>.\n5. Откроются «Файлы» — выбери присланный файл <code>.conf</code>.\n6. Подтверди добавление VPN-конфигурации (понадобится код-пароль устройства).\n7. Включение: найди туннель и смахни вправо по строке — VoiceOver озвучит переключатель.",
+    ],
+    'user portal show ins blind android' => [
+        'en' => "<b>Client — AmneziaWG</b> (Google Play)\n\n1. Press <b>AmneziaWG — Play</b> or <b>AmneziaWG — APK</b> below.\n2. Press <b>Get config</b> — the <code>.conf</code> file arrives.\n3. Open <b>AmneziaWG</b> → bottom-right <b>Add tunnel</b> (TalkBack announces «add button»).\n4. Choose <b>Create from file or archive</b>.\n5. In the file manager open <b>Downloads</b> and pick the <code>.conf</code> file.\n6. To connect: find the tunnel and swipe right on the row — TalkBack will announce the toggle.",
+        'ru' => "<b>Клиент — AmneziaWG</b> (Google Play)\n\n1. Нажми кнопку <b>AmneziaWG — Play</b> или <b>AmneziaWG — APK</b> ниже.\n2. Нажми <b>Получить конфиг</b> — придёт файл <code>.conf</code>.\n3. Открой <b>AmneziaWG</b> → внизу справа кнопка <b>Добавить туннель</b> (TalkBack озвучит «кнопка добавить»).\n4. Выбери <b>Создать из файла или архива</b>.\n5. В файловом менеджере открой папку <b>Загрузки</b> (Downloads) и выбери файл <code>.conf</code>.\n6. Включение: найди туннель и смахни вправо по строке — TalkBack озвучит переключатель.",
+    ],
+    'user portal issued notify' => [
+        'en' => 'You have been issued',
+        'ru' => 'Вам выдано',
+    ],
+    'user portal issued notify refresh' => [
+        'en' => 'press «Update» in your portal to see them',
+        'ru' => 'нажмите «Обновить», чтобы увидеть их',
+    ],
+    'user portal wg pick title' => [
+        'en' => 'Issue Amnezia/WG — choose a peer from the WG container, or add a new one',
+        'ru' => 'Выдать Amnezia/WG — выберите пир из контейнера WG или добавьте новый',
+    ],
+    'user portal wg pick issue' => [
+        'en' => 'Issue',
+        'ru' => 'Выдать',
+    ],
+    'user portal wg pick add' => [
+        'en' => '+ Add new config',
+        'ru' => '+ Добавить новый конфиг',
+    ],
+    'user portal wg pick bound' => [
+        'en' => 'issued',
+        'ru' => 'выдан',
+    ],
+    'user portal wg pick empty' => [
+        'en' => 'No WG peers in the container yet.',
+        'ru' => 'В контейнере WG пока нет пиров.',
+    ],
+    'user portal wg add mode' => [
+        'en' => 'New Amnezia/WG config — choose routing:',
+        'ru' => 'Новый Amnezia/WG-конфиг — выбери маршрутизацию:',
+    ],
+    'user portal wg name prompt' => [
+        'en' => 'Enter a name for the client:',
+        'ru' => 'Введи имя клиента:',
+    ],
+    'user portal wg name placeholder' => [
+        'en' => 'name',
+        'ru' => 'имя',
+    ],
+    'user portal wg select hint' => [
+        'en' => 'Tap to mark several configs, then Send.',
+        'ru' => 'Отмечай нажатием несколько конфигов, затем «Отправить».',
+    ],
+    'user portal wg send' => [
+        'en' => 'Send',
+        'ru' => 'Отправить',
+    ],
+    'user portal wg revoke pick title' => [
+        'en' => 'Revoke Amnezia/WG — choose issued configs',
+        'ru' => 'Отозвать Amnezia/WG — выберите выданные конфиги',
+    ],
+    'user portal wg revoke select hint' => [
+        'en' => 'Tap to mark several configs, then Revoke.',
+        'ru' => 'Отмечай нажатием несколько конфигов, затем «Отозвать».',
+    ],
+    'user portal wg revoke empty' => [
+        'en' => 'No issued Amnezia/WG configs.',
+        'ru' => 'Нет выданных конфигов Amnezia/WG.',
+    ],
+    'user portal wg revoke send' => [
+        'en' => 'Revoke',
+        'ru' => 'Отозвать',
     ],
     'user portal protocols' => [
         'en' => 'Protocols',
@@ -1109,6 +1389,10 @@ $i = [
         'en' => 'not delivered',
         'ru' => 'не доставлено',
     ],
+    'broadcast not delivered' => [
+        'en' => 'Not delivered to',
+        'ru' => 'Не доставлено кому',
+    ],
     'support' => [
         'en' => 'Support',
         'ru' => 'Поддержка',
@@ -1128,6 +1412,14 @@ $i = [
     'support new' => [
         'en' => 'New support request',
         'ru' => 'Новое обращение в поддержку',
+    ],
+    'support source bot' => [
+        'en' => 'bot',
+        'ru' => 'бот',
+    ],
+    'support source portal' => [
+        'en' => 'portal',
+        'ru' => 'кабинет',
     ],
     'support reply' => [
         'en' => 'Reply',
@@ -1277,10 +1569,6 @@ $i = [
         'en' => 'Thread reopened.',
         'ru' => 'Обращение открыто.',
     ],
-    'user portal up to date' => [
-        'en' => 'already up to date',
-        'ru' => 'уже актуально',
-    ],
     'user portal check' => [
         'en' => 'Check',
         'ru' => 'Проверка',
@@ -1330,16 +1618,32 @@ $i = [
         'ru' => 'Проверяю снова…',
     ],
     'user portal empty proto' => [
-        'en' => 'Empty protocol',
-        'ru' => 'Пустой протокол',
+        'en' => 'Empty Proto',
+        'ru' => 'Empty Proto',
+    ],
+    'user portal empty proto issue' => [
+        'en' => 'Issue Empty Proto',
+        'ru' => 'Выдать Empty Proto',
     ],
     'user portal empty proto title' => [
         'en' => 'Your MTProto link',
         'ru' => 'Твоя MTProto-ссылка',
     ],
+    'user portal empty proto how' => [
+        'en' => 'Tap the link below and confirm — it will be added as a proxy in Telegram. It is a proxy for Telegram, not a VPN.',
+        'ru' => 'Нажми ссылку ниже и подтверди — она добавится как прокси в Telegram. Это прокси для Telegram, а не VPN.',
+    ],
+    'user portal empty proto delivered' => [
+        'en' => 'Link delivered',
+        'ru' => 'Ссылка доставлена',
+    ],
     'user portal empty proto empty' => [
         'en' => 'MTProto is off in the admin panel yet.',
         'ru' => 'MTProto в админке пока выключен.',
+    ],
+    'user portal up to date' => [
+        'en' => 'already up to date',
+        'ru' => 'уже актуально',
     ],
 ];
 
