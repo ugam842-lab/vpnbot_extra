@@ -61,5 +61,3 @@ crontab -e
 - Чистая установка сама достаёт бинарники (`scripts/ensure_bin.sh`)
 
 Руководство пользователя: [docs/USER_GUIDE_RU.md](docs/USER_GUIDE_RU.md)
-
-Развёртывание IKEv2 / L2TP (IPsec): [docs/ikev-deploy.ru.md](docs/ikev-deploy.ru.md)
