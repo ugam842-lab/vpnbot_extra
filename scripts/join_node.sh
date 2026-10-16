@@ -18,7 +18,7 @@ for var in NODE_ID NODE_TOKEN PARENT_URL BOT_KEY PAC_HASH; do
 done
 
 REPO_URL="${REPO_URL:-https://github.com/ugam842-lab/vpnbot_extra.git}"
-REPO_BRANCH="${REPO_BRANCH:-master}"
+REPO_BRANCH="${REPO_BRANCH:-v2}"
 APP_DIR="${APP_DIR:-/root/vpnbot_extra}"
 
 CHILD_DOMAIN="$(echo "$CHILD_DOMAIN" | sed -E 's#^[a-zA-Z]+://##; s#/.*$##')"

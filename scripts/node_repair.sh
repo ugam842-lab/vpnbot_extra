@@ -35,6 +35,11 @@ PAC_FILE="config/pac.json"
 if [ ! -f "$PAC_FILE" ]; then
   echo '{}' > "$PAC_FILE"
 fi
+# Guard: this script provisions a CHILD node. Never downgrade a parent.
+if [ -f "$PAC_FILE" ] && [ "$(jq -r '.node_role // ""' "$PAC_FILE" 2>/dev/null)" = "parent" ]; then
+  echo "[node-repair] SKIP: this node is 'parent', refusing to flip it to child" >&2
+  exit 1
+fi
 TMP_PAC="$(mktemp)"
 jq_script='. | .node_role = "child"'
 if [ -n "${PAC_HASH:-}" ]; then
@@ -51,9 +56,6 @@ if [ -n "${NODE_DOMAIN:-}" ]; then
 fi
 if [ -n "${PARENT_URL:-}" ]; then
   jq_script="$jq_script | .parent_url = \$parent"
-fi
-if ! grep -q '^NODE_ROLE=child' override.env 2>/dev/null; then
-  echo 'NODE_ROLE=child' >> override.env
 fi
 jq --arg hash "${PAC_HASH:-}" --arg node_id "${NODE_ID:-}" --arg token "${NODE_TOKEN:-}" --arg domain "${NODE_DOMAIN:-}" --arg parent "${PARENT_URL:-}" "$jq_script" "$PAC_FILE" > "$TMP_PAC"
 mv "$TMP_PAC" "$PAC_FILE"
