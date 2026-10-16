@@ -1,7 +1,7 @@
 ARG image
 FROM golang:1.24.4-alpine AS awg-build
 RUN apk add --no-cache git make build-base linux-headers
-RUN git clone --depth 1 https://github.com/amnezia-vpn/amneziawg-go.git /src/amneziawg-go \
+RUN git clone --depth 1 --branch v0.2.19 https://github.com/amnezia-vpn/amneziawg-go.git /src/amneziawg-go \
     && cd /src/amneziawg-go \
     && make \
     && DESTDIR=/out make install

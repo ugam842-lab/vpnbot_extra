@@ -25,18 +25,28 @@ Telegram-бот для управления VPN-сервером из Telegram.
 - Ubuntu `22.04/24.04`
 - Debian `11/12`
 
-### Установка (ветка v2)
+### Установка (ветка master)
 
 ```shell
-wget -O- https://raw.githubusercontent.com/TrimXx/vpnbot_extra/v2/scripts/init.sh | sh -s YOUR_TELEGRAM_BOT_KEY v2
+wget -O- https://raw.githubusercontent.com/ugam842-lab/vpnbot_extra/master/scripts/init.sh | sh -s YOUR_TELEGRAM_BOT_KEY master
 ```
 
 При первом запуске создаются `.env` (из `env.defaults`), `config/` (из `config-templates/`) и `override.env`.
 
+`init.sh` берёт код из этого форка (`REPO_URL` = `https://github.com/ugam842-lab/vpnbot_extra.git`), апстрим TrimXx в установке не участвует.
+
+### Бинарники `bin/` при чистой установке
+
+`bin/` намеренно не версионируется, поэтому в свежем клоне его нет, а `docker-compose.yml` монтирует оттуда бинарники (`./bin/xray`, `./bin/amneziawg-go`). Перед `docker compose up` цель `make u` вызывает `scripts/ensure_bin.sh`: если файла нет — он достаётся из образа, который этот бинарник собирает (`vpnbot-xr` / `vpnbot-wg`), если файл на месте — не перезаписывается. Раньше на чистой ноде установка падала на старте контейнеров: docker создавал отсутствующий путь каталогом и отказывался монтировать каталог в файл (`not a directory: Are you trying to mount a directory onto a file`).
+
+### Переключение админ / пользователь
+
+В списке пользователей админки есть кнопка `Перейти как пользователь` — открывается собственный кабинет портала глазами обычного пользователя, без отдельного аккаунта и без выхода из админки. В кабинете тем же способом появляется `Перейти в админку`. Технически это команда `/userPortalAsSelf`.
+
 ### Обновление (без токена бота)
 
 ```shell
-wget -O- https://raw.githubusercontent.com/TrimXx/vpnbot_extra/v2/scripts/init.sh | sh -s -- v2
+wget -O- https://raw.githubusercontent.com/ugam842-lab/vpnbot_extra/master/scripts/init.sh | sh -s -- master
 ```
 
 ### Важное по обновлениям
@@ -45,7 +55,7 @@ wget -O- https://raw.githubusercontent.com/TrimXx/vpnbot_extra/v2/scripts/init.s
 - Для полного обновления репозитория используйте:
 
 ```shell
-UPGRADE_SCOPE=all wget -O- https://raw.githubusercontent.com/TrimXx/vpnbot_extra/v2/scripts/init.sh | sh -s -- v2
+UPGRADE_SCOPE=all wget -O- https://raw.githubusercontent.com/ugam842-lab/vpnbot_extra/master/scripts/init.sh | sh -s -- master
 ```
 
 - `make u` и `update/update.sh` обновлены для безопасного сценария: подтягиваются целевые кодовые пути (`app`, `update`, `makefile`, `version`) без wipe конфигов.
@@ -93,6 +103,16 @@ crontab -e
   - добавление DoH URL по алиасам в `dns.nameserver` для Clash-подписки.
 - Кнопка `change reality server ip/domain` теперь меняет только клиентский Reality `server` (bridge), не трогая `xray reality dest`.
 - Обновлен импорт бэкапа: `pac` восстанавливается merge-способом для совместимости старых/новых бэкапов и новых полей.
+- Рассылка уходит только одобренным пользователям: pending-заявки и отклонённые её не получают, а в отчёте перечисляются имена тех, кому доставка не удалась.
+- Переключение админ / пользователь: `Перейти как пользователь` в списке пользователей и `Перейти в админку` в кабинете.
+- Кабинет: кнопка `Обновить` перерисовывает текущее меню на месте, в том числе для message-команд, где нет callback_id.
+- Выдача конфигов: одно сводное сообщение «нажмите Обновить» по `telegram_id` вместо серии сообщений, просмотр конфига по имени.
+- Пагинация выдачи: новый конфиг открывается на той странице, где он действительно появился (раньше карточка возвращалась на предыдущую и добавленный конфиг был не виден).
+- Раздел «Вам выдано» считается по леджеру выдачи (`user_portal_issued`) — протокол и количество, а не перечень устройств.
+- Отзыв доступа зеркалит выдачу: выбор VLESS / Amnezia, мультивыбор AmneziaWG-конфигов, батч-отзыв.
+- Импорт бэкапа не сбрасывает настройки: битый или пустой `pac.json` больше не принимается за пустую конфигурацию.
+- Запись `pac.json` идёт под реентрантным локом, вечного кеша у cron больше нет — параллельные выдачи не теряют заявки.
+- `init.sh` больше не делает destructive `git checkout` рабочих файлов; чистая установка сама достаёт бинарники в `bin/` (`scripts/ensure_bin.sh`).
 
 ### Roadmap (v3.x)
 
@@ -146,13 +166,23 @@ Telegram bot for managing a VPN server directly from Telegram.
 ### Install
 
 ```shell
-wget -O- https://raw.githubusercontent.com/TrimXx/vpnbot_extra/master/scripts/init.sh | sh -s YOUR_TELEGRAM_BOT_KEY master
+wget -O- https://raw.githubusercontent.com/ugam842-lab/vpnbot_extra/master/scripts/init.sh | sh -s YOUR_TELEGRAM_BOT_KEY master
 ```
+
+`init.sh` installs from this fork (`REPO_URL` = `https://github.com/ugam842-lab/vpnbot_extra.git`); the TrimXx upstream is not used.
+
+### `bin/` binaries on a clean install
+
+`bin/` is deliberately not versioned, so a fresh clone has no such directory — while `docker-compose.yml` bind-mounts the binaries from it (`./bin/xray`, `./bin/amneziawg-go`). Before `docker compose up`, the `make u` target calls `scripts/ensure_bin.sh`: a missing file is extracted from the image that builds it (`vpnbot-xr` / `vpnbot-wg`), an existing one is left untouched. Previously a clean install failed at container start: docker created the missing path as a directory and refused to mount a directory onto a file (`not a directory: Are you trying to mount a directory onto a file`).
+
+### Admin / user view switch
+
+The admin user list has a `View as user` button — it opens your own portal cabinet from a regular user's point of view, without a second account and without leaving the admin panel. The cabinet then offers `Back to admin panel`. Under the hood this is the `/userPortalAsSelf` command.
 
 ### Upgrade (without bot token)
 
 ```shell
-wget -O- https://raw.githubusercontent.com/TrimXx/vpnbot_extra/master/scripts/init.sh | sh -s -- master
+wget -O- https://raw.githubusercontent.com/ugam842-lab/vpnbot_extra/master/scripts/init.sh | sh -s -- master
 ```
 
 ### Upgrade behavior
@@ -161,7 +191,7 @@ wget -O- https://raw.githubusercontent.com/TrimXx/vpnbot_extra/master/scripts/in
 - Full-repo upgrade is still available:
 
 ```shell
-UPGRADE_SCOPE=all wget -O- https://raw.githubusercontent.com/TrimXx/vpnbot_extra/v2/scripts/init.sh | sh -s -- v2
+UPGRADE_SCOPE=all wget -O- https://raw.githubusercontent.com/ugam842-lab/vpnbot_extra/master/scripts/init.sh | sh -s -- master
 ```
 
 - `make u` and `update/update.sh` are adjusted for safer upgrades: target code paths (`app`, `update`, `makefile`, `version`) are refreshed without wiping user configs.
@@ -202,6 +232,16 @@ Add:
 - `change reality server ip/domain` now changes only client-facing Reality `server` (bridge), without changing `xray reality dest`.
 - Backup import improved: `pac` is restored via merge strategy for old/new backup compatibility.
 - `/mirror` script updated (socat TCP/UDP, systemd units, install/status/restart/logs/uninstall).
+- Broadcast reaches approved users only: pending or rejected requests are skipped, and undelivered recipients are listed by name in the report.
+- Admin / user view switch: `View as user` in the user list, `Back to admin panel` in the cabinet.
+- Cabinet: the `Refresh` button re-renders the current menu in place, including for message commands that carry no callback id.
+- Config issuing: one summary "press Refresh" message per `telegram_id` instead of a burst, config preview by name.
+- Issuing pagination: a newly added config opens on the page where it actually landed (previously the card jumped back and the new config stayed invisible).
+- The "Issued to you" section is counted from the issuing ledger (`user_portal_issued`) — protocol and amount, not the device list.
+- Revoke mirrors issuing: VLESS / Amnezia choice, multi-select of AmneziaWG configs, batch revoke.
+- Backup import no longer resets settings: a corrupt or empty `pac.json` is not mistaken for an empty configuration.
+- `pac.json` writes are guarded by a reentrant lock and the cron process no longer keeps a forever cache, so parallel issuing does not lose requests.
+- `init.sh` no longer performs a destructive `git checkout` of working files; a clean install pulls the `bin/` binaries itself (`scripts/ensure_bin.sh`).
 
 ### Roadmap (v3.x)
 

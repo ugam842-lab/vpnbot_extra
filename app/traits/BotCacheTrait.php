@@ -3,6 +3,7 @@
 trait BotCacheTrait
 {
     protected $pacConfCache = null;
+    protected $pacLockDepth = 0;
     protected $xrayConfigCache = null;
     protected $xrayStatsCache = null;
     protected $dockerComposeServicesCache = null;
@@ -11,6 +12,68 @@ trait BotCacheTrait
     protected function invalidatePacConfCache(): void
     {
         $this->pacConfCache = null;
+    }
+
+    /**
+     * Путь к lock-файлу для сериализации read-modify-write на pac.json.
+     * Живёт рядом с самим pac.json (bind-mount /config), поэтому общая для всех
+     * PHP-воркеров NGINX Unit и переживает перезапуски контейнера.
+     */
+    protected function pacLockPath(): string
+    {
+        return $this->pac . '.lock';
+    }
+
+    /**
+     * Выполнить $fn под эксклюзивной блокировкой pac.json. Используется всеми
+     * точками read-modify-write («прочитать pac → изменить поле → записать»),
+     * которые иначе теряются при параллельной обработке апдейтов несколькими
+     * PHP-воркерами: каждый воркер читал один и тот же старый список, дописывал
+     * своего пользователя в памяти и затирал чужие записи поверх.
+     */
+    protected function withPacLock(callable $fn)
+    {
+        // Реентрантно: если этот же процесс уже держит блокировку (setPacConf,
+        // вызванный из-под withPacLock портала), повторно флочить НЕЛЬЗЯ — flock
+        // на втором fd к тому же файлу в том же процессе завис бы навсегда
+        // (deadlock). Глубина вложенности хранится в $pacLockDepth.
+        if ($this->pacLockDepth > 0) {
+            $this->pacLockDepth++;
+            try {
+                return $fn();
+            } finally {
+                $this->pacLockDepth--;
+            }
+        }
+        $dir = dirname($this->pacLockPath());
+        if ($dir !== '' && !is_dir($dir)) {
+            @mkdir($dir, 0775, true);
+        }
+        $fp = @fopen($this->pacLockPath(), 'c');
+        if ($fp === false) {
+            // Без блокировки продолжаем как раньше (best-effort), чтобы отказ
+            // lock-файла не уронил бота целиком.
+            return $fn();
+        }
+        try {
+            if (!flock($fp, LOCK_EX)) {
+                fclose($fp);
+
+                return $fn();
+            }
+            // Сбросить per-process кеш, чтобы внутри $fn прочитался свежий pac.json
+            // с диска, а не устаревшая версия из этого же воркера.
+            $this->pacLockDepth = 1;
+            $this->invalidatePacConfCache();
+            try {
+                return $fn();
+            } finally {
+                $this->pacLockDepth = 0;
+                flock($fp, LOCK_UN);
+            }
+        } finally {
+            fclose($fp);
+        }
     }
 
     protected function invalidateXrayConfigCache(): void

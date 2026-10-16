@@ -30,6 +30,9 @@ trait UserPortalTrait
             'userPortalWriteToSave',
             'userPortalReplySave',
             'userPortalWgAddName',
+            'userPortalWgAddSelfName',
+            'userPortalWgLimitSave',
+            'userPortalWgGlobalLimitSave',
         ], true);
     }
 
@@ -60,6 +63,24 @@ trait UserPortalTrait
         unset($_SESSION['userPortalUi']['flash']);
 
         return $flash;
+    }
+
+    /**
+     * Запоминает последнюю активную страницу списка пользователей/заявок и
+     * списка WG-пиров, чтобы после выдачи конфига из карточки (и её
+     * подэкранов) админ возвращался на ту же страницу, а не на первую.
+     */
+    protected function userPortalSetBackPage(array $map): void
+    {
+        $this->ensureUserPortalSession();
+        foreach ($map as $k => $v) {
+            $_SESSION['userPortalUi']['backPage'][$k] = (int) $v;
+        }
+    }
+
+    protected function userPortalBackPage(string $list = 'users'): int
+    {
+        return (int) ($_SESSION['userPortalUi']['backPage'][$list] ?? 0);
     }
 
     protected function resolveUserPortalMessageId(): int
@@ -163,6 +184,10 @@ trait UserPortalTrait
             'userPortalWriteToSave'           => $this->i18n('support placeholder'),
             'userPortalReplySave'             => $this->i18n('support placeholder'),
             'userPortalWgAddName'             => $this->i18n('user portal wg name placeholder'),
+            'userPortalWgAddSelfName'         => $this->i18n('user portal wg name placeholder'),
+            'userPortalWgLimitSave'           => $this->i18n('user portal wg limit placeholder'),
+            'userPortalWgGlobalLimitSave'     => $this->i18n('user portal wg limit placeholder'),
+            'userPortalExpirySave'            => $this->i18n('user portal expiry placeholder'),
             default                           => '',
         };
         // Промпт ввода ставит force_reply (фокус сразу на поле ввода). Telegram
@@ -243,11 +268,15 @@ trait UserPortalTrait
             $lines[] = $this->i18n('user portal account') . ': <code>' . htmlspecialchars($email, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</code>';
         }
 
-        $time = (int) ($client['time'] ?? 0);
-        if ($time > 0) {
-            $date = date('d.m.Y H:i', $time);
-            if ($time > time()) {
-                $lines[] = $this->i18n('user portal expires') . ': ' . $date . ' (' . $this->getTime($time) . ')';
+        // Единая сущность «времени»: срок кабинета (expires_at) — источник
+        // правды и для VLESS, и для Amnezia. Показываем его, а не поле
+        // VLESS-подписки, чтобы «время» в обоих местах совпадало.
+        $tgId = (string) ($session['telegram_id'] ?? '');
+        $expiresAt = $tgId !== '' ? $this->getUserPortalExpiry($tgId) : 0;
+        if ($expiresAt > 0) {
+            $date = date('d.m.Y H:i', $expiresAt);
+            if ($expiresAt > time()) {
+                $lines[] = $this->i18n('user portal expires') . ': ' . $date . ' (' . $this->getTime($expiresAt) . ')';
             } else {
                 $lines[] = $this->i18n('user portal expired') . ': ' . $date;
             }
@@ -272,15 +301,14 @@ trait UserPortalTrait
             $lines[] = $this->i18n('awg limit') . ': ' . $deviceCount . ' ' . $this->i18n('of') . ' ' . $awgLimit;
         }
 
-        // Сводка «сколько ВЫДАНО» — честные счёты от леджера user_portal_issued.
-        // Леджер инкрементится только когда админ явно жмёт «Выдать VLESS» /
-        // «Выдать Amnezia/WG» на карточке человека (см. bumpUserPortalIssued).
-        // Регистрации устройств (hwid) и WG-пиры сюда НЕ попадают — это отдельная
-        // строка «устройства» выше.
-        $ledger = $this->getUserPortalIssuedLedger();
-        $ledgerEntry = is_array($ledger[$ownerSubId] ?? null) ? $ledger[$ownerSubId] : [];
-        $issuedVless = (int) ($ledgerEntry['vless'] ?? 0);
-        $issuedWg = (int) ($ledgerEntry['wg'] ?? 0);
+        // Сводка «сколько ВЫДАНО» — от реального владения, а не от леджера
+        // user_portal_issued: леджер пишется только при явной выдаче и ключуется
+        // subscription_id, поэтому для людей без VLESS-подписки (пустой sub id)
+        // счёт Amnezia/WG расходился с реальным списком конфигов. Здесь считаем
+        // то же, что видно в списке «Мои конфиги AmneziaWG», чтобы «Вам выдано»
+        // всегда совпадало с фактом.
+        $issuedVless = $ownerSubId !== '' ? 1 : 0;
+        $issuedWg = count($this->userPortalOwnedWgClients($session));
         $lines[] = '';
         $lines[] = $this->i18n('user portal issued title') . ':';
         $lines[] = '· VLESS — ' . $issuedVless . ' ' . $this->i18n('user portal issued vless');
@@ -328,6 +356,53 @@ trait UserPortalTrait
         }
 
         return $label . $this->i18n('user portal protocol available') . $usage;
+    }
+
+    /**
+     * Компактная сводка для верхнего уровня кабинета: время жизни, трафик и
+     * сколько выдано (VLESS / Amnezia). Без email, счётчика устройств, лимита
+     * AWG и статуса пароля — детали уехали в экраны «Подписка» и «Мои
+     * устройства», чтобы верх кабинета не был перегружен.
+     */
+    protected function buildUserPortalSummaryLines(array $session): array
+    {
+        $client = $session['client'];
+        $pac = $this->getPacConf();
+        $st = $this->getXrayStats();
+        $lines = [];
+
+        // Время жизни — срок кабинета (expires_at), единый для VLESS и Amnezia.
+        $tgId = (string) ($session['telegram_id'] ?? '');
+        $expiresAt = $tgId !== '' ? $this->getUserPortalExpiry($tgId) : 0;
+        if ($expiresAt > 0) {
+            $date = date('d.m.Y H:i', $expiresAt);
+            if ($expiresAt > time()) {
+                $lines[] = $this->i18n('user portal expires') . ': ' . $date . ' (' . $this->getTime($expiresAt) . ')';
+            } else {
+                $lines[] = $this->i18n('user portal expired') . ': ' . $date;
+            }
+        } else {
+            $lines[] = $this->i18n('user portal expires') . ': ' . $this->i18n('user portal no expiry');
+        }
+
+        // Трафик.
+        $totals = $this->getSubscriptionXrayTrafficTotals($st, $client, $session['clientIndex']);
+        $trafficLine = $this->i18n('user portal traffic') . ': ' . $this->formatTrafficUpDown((int) $totals['download'], (int) $totals['upload']);
+        $limit = $this->getClientTrafficLimitBytes($client, $pac);
+        if ($limit > 0) {
+            $trafficLine .= ' / ' . $this->getBytes($limit);
+        }
+        $lines[] = $trafficLine;
+
+        // Сводка «сколько выдано».
+        $issuedVless = (string) ($session['subscription_id'] ?? '') !== '' ? 1 : 0;
+        $issuedWg = count($this->userPortalOwnedWgClients($session));
+        $lines[] = '';
+        $lines[] = $this->i18n('user portal issued title') . ':';
+        $lines[] = '· VLESS — ' . $issuedVless . ' ' . $this->i18n('user portal issued vless');
+        $lines[] = '· Amnezia/WG — ' . $issuedWg . ' ' . $this->i18n('user portal issued wg');
+
+        return $lines;
     }
 
     protected function shouldHandleUserPortalTextInput(): bool
@@ -416,6 +491,21 @@ trait UserPortalTrait
             }
             if ($callback === 'userPortalWgAddName') {
                 $this->userPortalWgAddName($message, ...$args);
+
+                return;
+            }
+            if ($callback === 'userPortalWgAddSelfName') {
+                $this->userPortalWgAddSelfName($message, ...$args);
+
+                return;
+            }
+            if ($callback === 'userPortalWgLimitSave') {
+                $this->userPortalWgLimitSave($message, ...$args);
+
+                return;
+            }
+            if ($callback === 'userPortalExpirySave') {
+                $this->userPortalExpirySave($message, ...$args);
 
                 return;
             }
@@ -512,6 +602,10 @@ trait UserPortalTrait
                 // Модерация касается только новых записей, а у них approved
                 // пишется явно как 0 (recordUserPortalSeen) или 1/2 (одобрить/отклонить).
                 'approved'        => (int) ($value['approved'] ?? 1),
+                'empty_proto'     => (int) ($value['empty_proto'] ?? 0),
+                'wg_limit'        => (int) ($value['wg_limit'] ?? 0),
+                'expires_at'      => (int) ($value['expires_at'] ?? 0),
+                'expiry_reminders'=> (array) ($value['expiry_reminders'] ?? []),
             ];
         }
         if (is_string($value) && $value !== '') {
@@ -523,6 +617,10 @@ trait UserPortalTrait
                 'username'        => '',
                 'name'            => '',
                 'approved'        => 1,
+                'empty_proto'     => 0,
+                'wg_limit'        => 0,
+                'expires_at'      => 0,
+                'expiry_reminders'=> [],
             ];
         }
 
@@ -534,6 +632,10 @@ trait UserPortalTrait
             'username'        => '',
             'name'            => '',
             'approved'        => 1,
+            'empty_proto'     => 0,
+            'wg_limit'        => 0,
+            'expires_at'      => 0,
+            'expiry_reminders'=> [],
         ];
     }
 
@@ -554,34 +656,308 @@ trait UserPortalTrait
 
     protected function setUserPortalBinding(string $telegramId, string $subscriptionId): void
     {
-        $pac = $this->getPacConf();
-        $bindings = $this->getUserPortalBindings();
-        $prev = self::normalizeUserPortalBinding($bindings[$telegramId] ?? null);
-        $username = $prev['username'];
-        $name     = $prev['name'];
+        $this->withPacLock(function () use ($telegramId, $subscriptionId): void {
+            $pac = $this->getPacConf();
+            $bindings = $this->getUserPortalBindings();
+            $prev = self::normalizeUserPortalBinding($bindings[$telegramId] ?? null);
+            $username = $prev['username'];
+            $name     = $prev['name'];
 
-        // Имя/ник могут быть пустыми, если запись появилась не из /start, а через
-        // grant-меню (бот знает только telegram id). Тогда резолвим через getChat,
-        // чтобы в people-directory вместо голого id был @username или имя.
-        if ($username === '' && $name === '') {
-            $identity = $this->resolveTelegramIdentity((string) $telegramId);
-            if (is_array($identity)) {
-                $username = trim((string) ($identity['username'] ?? ''));
-                $name = trim((string) ($identity['first_name'] ?? '') . ' ' . (string) ($identity['last_name'] ?? ''));
+            // Имя/ник могут быть пустыми, если запись появилась не из /start, а через
+            // grant-меню (бот знает только telegram id). Тогда резолвим через getChat,
+            // чтобы в people-directory вместо голого id был @username или имя.
+            if ($username === '' && $name === '') {
+                $identity = $this->resolveTelegramIdentity((string) $telegramId);
+                if (is_array($identity)) {
+                    $username = trim((string) ($identity['username'] ?? ''));
+                    $name = trim((string) ($identity['first_name'] ?? '') . ' ' . (string) ($identity['last_name'] ?? ''));
+                }
+            }
+
+            $bindings[$telegramId] = [
+                'subscription_id' => $subscriptionId,
+                'approved'        => $prev['approved'],
+                'granted_at'      => $prev['granted_at'] ?: time(),
+                'activated'       => $prev['activated'],
+                'first_seen_at'   => $prev['first_seen_at'] ?: time(),
+                'username'        => $username,
+                'name'            => $name,
+                'empty_proto'     => $prev['empty_proto'],
+                'wg_limit'        => $prev['wg_limit'],
+                'expires_at'      => $prev['expires_at'],
+                'expiry_reminders'=> $prev['expiry_reminders'],
+            ];
+            $pac['user_portal_bindings'] = $bindings;
+            $this->setPacConf($pac);
+        });
+    }
+
+    /**
+     * Лимит конфигов Amnezia/WG для пользователя: per-user override в
+     * user_portal_bindings[$telegramId]['wg_limit'] (>0), иначе глобальный
+     * дефолт из pac.json user_portal_wg_limit (по умолчанию 15). Это НЕ лимит
+     * устройств (hwid/awg в X-Ray) — это именно число владеемых WG-конфигов.
+     */
+    protected function getUserPortalWgLimit(string $telegramId): int
+    {
+        $record = self::normalizeUserPortalBinding($this->getUserPortalBindings()[$telegramId] ?? null);
+        $override = (int) ($record['wg_limit'] ?? 0);
+        if ($override > 0) {
+            return $override;
+        }
+        $pac = $this->getPacConf();
+        $global = (int) ($pac['user_portal_wg_limit'] ?? 15);
+
+        return $global > 0 ? $global : 15;
+    }
+
+    protected function setUserPortalWgLimit(string $telegramId, int $limit): void
+    {
+        $this->withPacLock(function () use ($telegramId, $limit): void {
+            $pac = $this->getPacConf();
+            $bindings = $this->getUserPortalBindings();
+            $prev = self::normalizeUserPortalBinding($bindings[$telegramId] ?? null);
+            $bindings[$telegramId] = array_merge($prev, ['wg_limit' => $limit]);
+            $pac['user_portal_bindings'] = $bindings;
+            $this->setPacConf($pac);
+        });
+    }
+
+    /**
+     * Срок жизни кабинета (unix timestamp, 0 = без ограничения). Единая сущность
+     * «времени» пользователя: пишется параллельно в X-Ray (VLESS) и во все
+     * Amnezia/WG-конфиги, а при истечении «затыкается и то и то» (cron).
+     */
+    protected function getUserPortalExpiry(string $telegramId): int
+    {
+        $record = self::normalizeUserPortalBinding($this->getUserPortalBindings()[$telegramId] ?? null);
+
+        return (int) ($record['expires_at'] ?? 0);
+    }
+
+    /**
+     * Записать срок кабинета: pac.json (expires_at + сброс напоминаний), затем
+     * каскад на X-Ray и Amnezia ВНЕ файловой блокировки pac.json — эти системы
+     * живут в своих файлах (xray.json / clients1.json / wg0.conf) и не делят
+     * лок с pac.json.
+     */
+    protected function setUserPortalExpiry(string $telegramId, int $expiresAt): void
+    {
+        $telegramId = trim($telegramId);
+        if ($telegramId === '') {
+            return;
+        }
+        $subscriptionId = '';
+        $this->withPacLock(function () use ($telegramId, $expiresAt, &$subscriptionId): void {
+            $pac = $this->getPacConf();
+            $bindings = $this->getUserPortalBindings();
+            $prev = self::normalizeUserPortalBinding($bindings[$telegramId] ?? null);
+            // Новый срок — новые вехи напоминаний (5/3/1 день) должны отработать
+            // заново относительно него.
+            $bindings[$telegramId] = array_merge($prev, [
+                'expires_at'       => $expiresAt > 0 ? $expiresAt : 0,
+                'expiry_reminders' => [],
+            ]);
+            $subscriptionId = $bindings[$telegramId]['subscription_id'];
+            $pac['user_portal_bindings'] = $bindings;
+            $this->setPacConf($pac);
+        });
+
+        if ($subscriptionId !== '') {
+            $this->setUserPortalVlessTime($subscriptionId, $expiresAt);
+        }
+        $this->setUserPortalWgTime($telegramId, $expiresAt);
+    }
+
+    /**
+     * Человекочитаемый ввод срока («30 дней», «1 месяц», «5d», дата) → unix.
+     * Возвращает 0 = снять срок, null = неверный формат. strtotime не знает
+     * русских названий единиц, поэтому подменяем их на английские перед парсом.
+     */
+    protected function parseUserPortalExpiry(string $text): ?int
+    {
+        $text = trim($text);
+        if ($text === '' || $text === '0') {
+            return 0;
+        }
+        if (preg_match('~^(без|без ограничения|бессрочно|навсегда|unlimited|none|never)$~iu', $text)) {
+            return 0;
+        }
+        $map = [
+            'секунд' => 'second', 'секунды' => 'second', 'секунда' => 'second', 'сек' => 'second',
+            'минут' => 'minute', 'минуты' => 'minute', 'минута' => 'minute', 'мин' => 'minute',
+            'часов' => 'hour', 'часа' => 'hour', 'час' => 'hour',
+            'суток' => 'day', 'сутки' => 'day', 'сутк' => 'day',
+            'дней' => 'day', 'дня' => 'day', 'день' => 'day',
+            'недель' => 'week', 'недели' => 'week', 'неделю' => 'week', 'недел' => 'week', 'нед' => 'week',
+            'месяцев' => 'month', 'месяца' => 'month', 'месяц' => 'month', 'мес' => 'month',
+            'лет' => 'year', 'года' => 'year', 'год' => 'year',
+        ];
+        $normalized = $text;
+        foreach ($map as $ru => $en) {
+            $normalized = preg_replace('~(\d+)\s*' . preg_quote($ru, '~') . '~iu', '$1 ' . $en, $normalized);
+        }
+        $ts = strtotime($normalized);
+
+        return ($ts === false || $ts <= time()) ? null : $ts;
+    }
+
+    /**
+     * Записать срок на все X-Ray-клиенты подписки (владелец + устройства) в
+     * мастер-реестр inbounds[0] (после expandXrayRegistryClients это clients_all).
+     * applyBothTransportInboundClients разнесёт `time` по транспортным inbound'ам
+     * при записи. 0/отрицательный — снять срок.
+     */
+    protected function setUserPortalVlessTime(string $subscriptionId, int $expiresAt): void
+    {
+        $subscriptionId = trim($subscriptionId);
+        if ($subscriptionId === '') {
+            return;
+        }
+        $xr = $this->getXray();
+        if (!is_array($xr['inbounds'][0]['settings']['clients'] ?? null)) {
+            return;
+        }
+        $clients = &$xr['inbounds'][0]['settings']['clients'];
+        $changed = false;
+        foreach ($clients as $i => $v) {
+            if (!is_array($v) || !$this->isSubscriptionIdMatch($v, $subscriptionId)) {
+                continue;
+            }
+            if ($expiresAt > 0) {
+                if ((int) ($v['time'] ?? 0) !== $expiresAt) {
+                    $clients[$i]['time'] = $expiresAt;
+                    $changed = true;
+                }
+            } elseif (array_key_exists('time', $v)) {
+                unset($clients[$i]['time']);
+                $changed = true;
             }
         }
+        if ($changed) {
+            $this->restartXray($xr, 1);
+        }
+    }
 
-        $bindings[$telegramId] = [
-            'subscription_id' => $subscriptionId,
-            'approved'        => $prev['approved'],
-            'granted_at'      => $prev['granted_at'] ?: time(),
-            'activated'       => $prev['activated'],
-            'first_seen_at'   => $prev['first_seen_at'] ?: time(),
-            'username'        => $username,
-            'name'            => $name,
-        ];
-        $pac['user_portal_bindings'] = $bindings;
-        $this->setPacConf($pac);
+    /**
+     * Записать срок на все Amnezia/WG-конфиги, которыми владеет пользователь.
+     * Зеркалит timerClient(): `## time` на interface + на парный peer (по AllowedIPs).
+     */
+    protected function setUserPortalWgTime(string $telegramId, int $expiresAt): void
+    {
+        $owned = $this->userPortalIssuedWgClientsByTg($telegramId);
+        if ($owned === []) {
+            return;
+        }
+        $clients = $this->readClients();
+        $server  = $this->readConfig();
+        $date    = $expiresAt > 0 ? date('Y-m-d H:i:s', $expiresAt) : '';
+        foreach ($owned as $item) {
+            $idx = (int) ($item['index'] ?? -1);
+            if ($idx < 0 || !is_array($clients[$idx]['interface'] ?? null)) {
+                continue;
+            }
+            $address = (string) ($clients[$idx]['interface']['Address'] ?? '');
+            if ($expiresAt > 0) {
+                $clients[$idx]['interface']['## time'] = $date;
+            } else {
+                unset($clients[$idx]['interface']['## time']);
+            }
+            if ($address === '') {
+                continue;
+            }
+            foreach ($server['peers'] as $k => $v) {
+                if (($v['AllowedIPs'] ?? '') !== $address) {
+                    continue;
+                }
+                if ($expiresAt > 0) {
+                    $server['peers'][$k]['## time'] = $date;
+                } else {
+                    unset($server['peers'][$k]['## time']);
+                }
+            }
+        }
+        $this->saveClients($clients);
+        $this->restartWG($this->createConfig($server));
+    }
+
+    /**
+     * Напоминания перед истечением кабинета: за 5/3/1 день — текст + кнопка
+     * «Поддержка» (обычный тред поддержки). Вызывается из cron() раз в 10 сек.
+     * Каждая веха шлётся ровно один раз (expiry_reminders хранит отправленные).
+     */
+    public function checkUserPortalExpiryReminders(): void
+    {
+        try {
+            $bindings = $this->getUserPortalBindings();
+            if (!is_array($bindings) || $bindings === []) {
+                return;
+            }
+            $now = time();
+            foreach ($bindings as $telegramId => $raw) {
+                $record = self::normalizeUserPortalBinding($raw);
+                $expiresAt = (int) ($record['expires_at'] ?? 0);
+                if ($expiresAt <= 0 || $expiresAt <= $now) {
+                    continue;
+                }
+                $daysLeft = (int) floor(($expiresAt - $now) / 86400);
+                if (!in_array($daysLeft, [5, 3, 1], true)) {
+                    continue;
+                }
+                $sent = $record['expiry_reminders'];
+                if (is_array($sent) && in_array($daysLeft, $sent, true)) {
+                    continue;
+                }
+                $this->send(
+                    (int) $telegramId,
+                    $this->i18n('user portal expiry reminder'),
+                    0,
+                    [[['text' => $this->i18n('user portal support title'), 'callback_data' => '/userPortalSupport']]],
+                );
+                $this->withPacLock(function () use ($telegramId, $daysLeft): void {
+                    $pac = $this->getPacConf();
+                    $bindings = $this->getUserPortalBindings();
+                    $prev = self::normalizeUserPortalBinding($bindings[$telegramId] ?? null);
+                    $sent = $prev['expiry_reminders'];
+                    $sent[] = $daysLeft;
+                    $sent = array_values(array_unique(array_map('intval', $sent)));
+                    $bindings[$telegramId] = array_merge($prev, ['expiry_reminders' => $sent]);
+                    $pac['user_portal_bindings'] = $bindings;
+                    $this->setPacConf($pac);
+                });
+            }
+        } catch (\Throwable $e) {
+            // Напоминания не должны ронять cron-цикл.
+        }
+    }
+
+    protected function userPortalExpiryText(int $expiresAt): string
+    {
+        return $expiresAt > 0 ? date('d.m.Y H:i', $expiresAt) : $this->i18n('user portal no expiry');
+    }
+
+    /**
+     * Уведомить пользователя, что ему задали/сняли срок жизни кабинета.
+     * Админу отдельного push не шлём: он сам выполняет действие и сразу видит
+     * подтверждение вспышкой на карточке. Здесь — только получатель.
+     */
+    protected function notifyUserPortalExpirySet(string $telegramId, int $expiresAt): void
+    {
+        $telegramId = trim($telegramId);
+        if ($telegramId === '' || (int) $telegramId <= 0) {
+            return;
+        }
+        if ($expiresAt > 0) {
+            $left = $expiresAt > time() ? ' (' . $this->getTime($expiresAt) . ')' : '';
+            $text = $this->i18n('user portal expiry set notify') . ' ' . date('d.m.Y H:i', $expiresAt) . $left;
+        } else {
+            $text = $this->i18n('user portal expiry unset notify');
+        }
+        try {
+            $this->send((int) $telegramId, $text, 0);
+        } catch (\Throwable $e) {
+            // Уведомление не должно ронять сохранение срока.
+        }
     }
 
     /**
@@ -593,29 +969,36 @@ trait UserPortalTrait
     protected function recordUserPortalSeen(string $telegramId): void
     {
         $telegramId = trim($telegramId);
-        if ($telegramId === '' || $this->admin) {
+        if ($telegramId === '' || $this->admin || $this->renderingAsUser) {
             return;
         }
-        $pac = $this->getPacConf();
-        $bindings = $this->getUserPortalBindings();
-        $prev = self::normalizeUserPortalBinding($bindings[$telegramId] ?? null);
-        $isNew = (int) ($prev['first_seen_at'] ?? 0) === 0;
         $username = trim((string) ($this->input['username'] ?? ''));
         $name = trim((string) ($this->input['first_name'] ?? '') . ' ' . (string) ($this->input['last_name'] ?? ''));
-        // Впервые нажавший «Старт» человек получает статус pending (на модерации):
-        // в личный кабинет его пустят только после кнопки «Одобрить» у админа.
-        $approved = $isNew ? 0 : (int) ($prev['approved'] ?? 1);
-        $bindings[$telegramId] = [
-            'subscription_id' => $prev['subscription_id'],
-            'granted_at'      => $prev['granted_at'],
-            'activated'       => $prev['activated'],
-            'first_seen_at'   => $prev['first_seen_at'] ?: time(),
-            'username'        => $username !== '' ? $username : $prev['username'],
-            'name'            => $name !== '' ? $name : $prev['name'],
-            'approved'        => $approved,
-        ];
-        $pac['user_portal_bindings'] = $bindings;
-        $this->setPacConf($pac);
+        $isNew = false;
+        $this->withPacLock(function () use ($telegramId, $username, $name, &$isNew): void {
+            $pac = $this->getPacConf();
+            $bindings = $this->getUserPortalBindings();
+            $prev = self::normalizeUserPortalBinding($bindings[$telegramId] ?? null);
+            $isNew = (int) ($prev['first_seen_at'] ?? 0) === 0;
+            // Впервые нажавший «Старт» человек получает статус pending (на модерации):
+            // в личный кабинет его пустят только после кнопки «Одобрить» у админа.
+            $approved = $isNew ? 0 : (int) ($prev['approved'] ?? 1);
+            $bindings[$telegramId] = [
+                'subscription_id' => $prev['subscription_id'],
+                'granted_at'      => $prev['granted_at'],
+                'activated'       => $prev['activated'],
+                'first_seen_at'   => $prev['first_seen_at'] ?: time(),
+                'username'        => $username !== '' ? $username : $prev['username'],
+                'name'            => $name !== '' ? $name : $prev['name'],
+                'approved'        => $approved,
+                'empty_proto'     => $prev['empty_proto'],
+                'wg_limit'        => $prev['wg_limit'],
+                'expires_at'      => $prev['expires_at'],
+                'expiry_reminders'=> $prev['expiry_reminders'],
+            ];
+            $pac['user_portal_bindings'] = $bindings;
+            $this->setPacConf($pac);
+        });
 
         if ($isNew) {
             $firstName = trim((string) ($this->input['first_name'] ?? ''));
@@ -640,8 +1023,19 @@ trait UserPortalTrait
         }
         $c = [];
         require $configFile;
-        $adminId = isset($c['admin']) && is_array($c['admin']) ? (string) ($c['admin'][0] ?? '') : '';
-        if ($adminId === '' || $adminId === $telegramId) {
+        // Раскладываем заявку ВСЕМ админам (config.php хранит их массивом), а не
+        // только admin[0]: единая команда должна видеть новый «Старт» у каждого.
+        $admins = isset($c['admin']) && is_array($c['admin']) ? $c['admin'] : [];
+        // Админы из admin_silent (config.php) заявку не получают — остаются
+        // админами с полными правами, но без уведомлений о заявках.
+        $silent = isset($c['admin_silent']) && is_array($c['admin_silent']) ? $c['admin_silent'] : [];
+        if ($silent !== []) {
+            $silentMap = array_map('strval', $silent);
+            $admins = array_values(array_filter($admins, static function ($id) use ($silentMap) {
+                return !in_array((string) $id, $silentMap, true);
+            }));
+        }
+        if ($admins === []) {
             return;
         }
 
@@ -677,14 +1071,295 @@ trait UserPortalTrait
             ],
         ], [
             [
+                'text'          => $this->i18n('user portal empty proto issue'),
+                'callback_data' => '/userPortalCardEmptyProto ' . $telegramId,
+            ],
+            [
                 'text'          => '✉️ Написать',
                 'callback_data' => '/userPortalWriteTo ' . $telegramId,
             ],
         ]];
+        foreach ($admins as $adminId) {
+            $adminId = (string) $adminId;
+            if ($adminId === '' || $adminId === $telegramId) {
+                continue;
+            }
+            try {
+                $r = $this->send($adminId, $text, button: $buttons);
+                $messageId = isset($r['result']['message_id']) ? (int) $r['result']['message_id'] : 0;
+                if ($messageId > 0) {
+                    // Запомнить message_id карточки у ЭТОГО админа, чтобы при
+                    // approve/reject свернуть кнопки у всех, а не только у нажавшего.
+                    $this->addModerationCard($telegramId, $adminId, $messageId, $text);
+                }
+            } catch (\Throwable $e) {
+                // Неудачная рассылка одному админу не должна ломать портал.
+            }
+        }
+    }
+
+    /**
+     * Рассылка остальным админам уведомления о решении по заявке. Вызывается
+     * после approve/reject/write: чтобы заявка не висела непрочитанной у других
+     * админов, каждый из них (кроме нажавшего) получает строку «<админ> <глагол>
+     * заявку <имя юзера>». Карточку модерации мы при этом НЕ сворачиваем у
+     * остальных — это их собственные сообщения в их же чатах, до которых нам
+     * не добраться из контекста нажавшего; вместо этого шлём короткий текст,
+     * который однозначно закрывает вопрос «что с этой заявкой».
+     */
+    protected function notifyAdminDecision(string $telegramId, string $verb): void
+    {
+        $configFile = dirname(__DIR__) . '/config.php';
+        if (!is_file($configFile)) {
+            return;
+        }
+        $c = [];
+        require $configFile;
+        $admins = isset($c['admin']) && is_array($c['admin']) ? $c['admin'] : [];
+        // Админы из admin_silent (config.php) заявку не получают — остаются
+        // админами с полными правами, но без уведомлений о заявках.
+        $silent = isset($c['admin_silent']) && is_array($c['admin_silent']) ? $c['admin_silent'] : [];
+        if ($silent !== []) {
+            $silentMap = array_map('strval', $silent);
+            $admins = array_values(array_filter($admins, static function ($id) use ($silentMap) {
+                return !in_array((string) $id, $silentMap, true);
+            }));
+        }
+        if ($admins === []) {
+            return;
+        }
+
+        // Имя нажавшего админа: из текущего контекста (from). Имя/фамилия → @ник
+        // → id, тем же порядком, что и в notifyAdminNewStart.
+        $actingId = (string) ($this->input['from'] ?? '');
+        $acting   = 'Админ';
+        if ($actingId !== '') {
+            $identity = $this->resolveTelegramIdentity($actingId);
+            if (is_array($identity)) {
+                $name = trim((string) ($identity['first_name'] ?? '') . ' ' . (string) ($identity['last_name'] ?? ''));
+                if ($name !== '') {
+                    $acting = $name;
+                } elseif (!empty($identity['username'])) {
+                    $acting = '@' . $identity['username'];
+                } else {
+                    $acting = 'id ' . $actingId;
+                }
+            }
+        }
+
+        $who    = $this->userPortalWriteTargetName($telegramId);
+        $text   = $acting . ' ' . $verb . ' заявку ' . $who . ' (id ' . $telegramId . ')';
+
+        foreach ($admins as $adminId) {
+            $adminId = (string) $adminId;
+            if ($adminId === '' || $adminId === $actingId) {
+                continue;
+            }
+            try {
+                $this->send($adminId, $text);
+            } catch (\Throwable $e) {
+                // Неудачная рассылка одному админу не должна ломать портал.
+            }
+        }
+    }
+
+    /**
+     * Рассылка остальным админам «Конфиг доставлен» после выдачи WG/VLESS.
+     * Нажавший админ видит тост в карточке, поэтому пушим остальным (кроме
+     * нажавшего), как и notifyAdminDecision. admin_silent пропускаем. $who —
+     * уже готовое человекочитаемое имя получателя.
+     */
+    protected function notifyAdminIssue(string $who, string $kind, int $count = 1): void
+    {
+        if ($count < 1) {
+            return;
+        }
+        $configFile = dirname(__DIR__) . '/config.php';
+        if (!is_file($configFile)) {
+            return;
+        }
+        $c = [];
+        require $configFile;
+        $admins = isset($c['admin']) && is_array($c['admin']) ? $c['admin'] : [];
+        $silent = isset($c['admin_silent']) && is_array($c['admin_silent']) ? $c['admin_silent'] : [];
+        if ($silent !== []) {
+            $silentMap = array_map('strval', $silent);
+            $admins = array_values(array_filter($admins, static function ($id) use ($silentMap) {
+                return !in_array((string) $id, $silentMap, true);
+            }));
+        }
+        if ($admins === []) {
+            return;
+        }
+
+        $actingId = (string) ($this->input['from'] ?? '');
+        $acting = 'Админ';
+        if ($actingId !== '') {
+            $identity = $this->resolveTelegramIdentity($actingId);
+            if (is_array($identity)) {
+                $name = trim((string) ($identity['first_name'] ?? '') . ' ' . (string) ($identity['last_name'] ?? ''));
+                if ($name !== '') {
+                    $acting = $name;
+                } elseif (!empty($identity['username'])) {
+                    $acting = '@' . $identity['username'];
+                } else {
+                    $acting = 'id ' . $actingId;
+                }
+            }
+        }
+
+        $proto = match ($kind) {
+            'wg'    => 'Amnezia/WG',
+            'vless' => 'VLESS',
+            'link'  => $this->i18n('user portal empty proto'),
+            default => 'VLESS',
+        };
+        $okKey = $kind === 'link' ? 'user portal empty proto delivered' : 'user portal issue config ok';
+        $text = '✅ ' . $this->i18n($okKey) . ' · ' . $acting . ' → ' . $who . ' · ' . $proto . ($count > 1 ? ' ×' . $count : '');
+
+        foreach ($admins as $adminId) {
+            $adminId = (string) $adminId;
+            if ($adminId === '' || $adminId === $actingId) {
+                continue;
+            }
+            try {
+                $this->send($adminId, $text);
+            } catch (\Throwable $e) {
+                // Неудачная рассылка одному админу не должна ломать портал.
+            }
+        }
+    }
+
+    /**
+     * Путь к файлу, где хранятся message_id карточек модерации, разосланных
+     * админам. Лежит рядом с pac.json (bind-mount /config), поэтому общий для
+     * всех PHP-воркеров и переживает перезапуски контейнера.
+     */
+    protected function moderationCardsPath(): string
+    {
+        return dirname($this->pac) . '/portal_moderation.json';
+    }
+
+    /**
+     * Атомарно прочитать-изменить-записать portal_moderation.json под flock.
+     * $fn получает массив карточек ПО ССЫЛКЕ (сигнатура function (&$cards)) и
+     * может вернуть значение, пробрасываемое наружу. Те же мотивы, что у
+     * withPacLock: несколько PHP-воркеров пишут один JSON, без блокировки
+     * теряются чужие карточки.
+     */
+    protected function mutateModerationCards(callable $fn)
+    {
+        $path = $this->moderationCardsPath();
+        $dir = dirname($path);
+        if ($dir !== '' && !is_dir($dir)) {
+            @mkdir($dir, 0775, true);
+        }
+        $fp = @fopen($path . '.lock', 'c');
+        if ($fp === false) {
+            return null;
+        }
         try {
-            $this->send($adminId, $text, button: $buttons);
-        } catch (\Throwable $e) {
-            // Неудачная рассылка не должна ломать портал.
+            if (!flock($fp, LOCK_EX)) {
+                fclose($fp);
+
+                return null;
+            }
+            $raw = @file_get_contents($path);
+            $cards = json_decode((string) $raw, true);
+            if (!is_array($cards)) {
+                $cards = [];
+            }
+            $result = $fn($cards);
+            $payload = json_encode($cards, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            if ($payload !== false) {
+                $tmp = $path . '.tmp.' . getmypid() . '.' . bin2hex(random_bytes(4));
+                if (file_put_contents($tmp, $payload, LOCK_EX) === strlen($payload)) {
+                    @rename($tmp, $path);
+                } else {
+                    @unlink($tmp);
+                }
+            }
+
+            return $result;
+        } finally {
+            flock($fp, LOCK_UN);
+            fclose($fp);
+        }
+    }
+
+    /**
+     * Запомнить карточку модерации, отправленную конкретному админу: чтобы при
+     * approve/reject свернуть кнопки не только у нажавшего, а у всех, кому ушла
+     * заявка.
+     */
+    protected function addModerationCard(string $telegramId, string $chatId, int $messageId, string $text): void
+    {
+        if ($telegramId === '' || $chatId === '' || $messageId <= 0) {
+            return;
+        }
+        $this->mutateModerationCards(function (&$cards) use ($telegramId, $chatId, $messageId, $text): void {
+            if (!isset($cards[$telegramId]) || !is_array($cards[$telegramId])) {
+                $cards[$telegramId] = ['text' => $text, 'cards' => []];
+            }
+            $cards[$telegramId]['text'] = $text;
+            $cards[$telegramId]['cards'][] = ['chat' => $chatId, 'message_id' => $messageId];
+        });
+    }
+
+    /**
+     * Вернуть и удалить карточки модерации заявки (заявка закрыта решением).
+     */
+    protected function takeModerationCards(string $telegramId): array
+    {
+        $entry = $this->mutateModerationCards(function (&$cards) use ($telegramId) {
+            $e = $cards[$telegramId] ?? null;
+            unset($cards[$telegramId]);
+
+            return $e;
+        });
+
+        return is_array($entry) ? $entry : [];
+    }
+
+    /**
+     * Свернуть карточки модерации заявки у ВСЕХ админов (включая нажавшего):
+     * убрать inline-кнопки и дописать итог решения. Ключевое требование цикла
+     * модерации — после approve/reject кнопки «Одобрить/Отклонить/Написать»
+     * исчезают у каждого, больше нажать нельзя.
+     */
+    protected function collapseModerationCards(string $telegramId, string $resultLabel): void
+    {
+        $entry = $this->takeModerationCards($telegramId);
+        $cards = isset($entry['cards']) && is_array($entry['cards']) ? $entry['cards'] : [];
+        $savedText = (string) ($entry['text'] ?? '');
+        $collapsed = [];
+
+        foreach ($cards as $card) {
+            $chat = (string) ($card['chat'] ?? '');
+            $mid  = (int) ($card['message_id'] ?? 0);
+            if ($chat === '' || $mid <= 0) {
+                continue;
+            }
+            $text = $savedText !== '' ? $savedText : (string) ($card['text'] ?? '');
+            $newText = ($text !== '' ? $text . "\n" : '') . $resultLabel;
+            try {
+                $this->collapseMessage($chat, $mid, $newText);
+                $collapsed[$chat . ':' . $mid] = true;
+            } catch (\Throwable $e) {
+            }
+        }
+
+        // Карточка нажавшего админа: его сообщение сворачивается всегда, даже
+        // если state пуст (заявка отправлена до деплоя этого фикса).
+        $selfChat = (string) ($this->input['chat'] ?? '');
+        $selfMid  = (int) ($this->input['message_id'] ?? 0);
+        if ($selfChat !== '' && $selfMid > 0 && !isset($collapsed[$selfChat . ':' . $selfMid])) {
+            $done = (string) ($this->input['message'] ?? '');
+            $newText = ($done !== '' ? $done . "\n" : '') . $resultLabel;
+            try {
+                $this->collapseMessage($selfChat, $selfMid, $newText);
+            } catch (\Throwable $e) {
+            }
         }
     }
 
@@ -716,26 +1391,24 @@ trait UserPortalTrait
         if (!preg_match('~^\d{5,}$~', $telegramId)) {
             return;
         }
-        $pac = $this->getPacConf();
-        $bindings = $this->getUserPortalBindings();
-        $prev = self::normalizeUserPortalBinding($bindings[$telegramId] ?? null);
-        $prev['approved'] = 1;
-        $bindings[$telegramId] = $prev;
-        $pac['user_portal_bindings'] = $bindings;
-        $this->setPacConf($pac);
+        $this->withPacLock(function () use ($telegramId): void {
+            $pac = $this->getPacConf();
+            $bindings = $this->getUserPortalBindings();
+            $prev = self::normalizeUserPortalBinding($bindings[$telegramId] ?? null);
+            $prev['approved'] = 1;
+            $bindings[$telegramId] = $prev;
+            $pac['user_portal_bindings'] = $bindings;
+            $this->setPacConf($pac);
+        });
+
+        // Уведомить остальных админов о решении, чтобы заявка не висела у них
+        // непрочитанной.
+        $this->notifyAdminDecision($telegramId, 'одобрил');
 
         // Свернуть карточку модерации у админа: убрать кнопки и зафиксировать
         // решение прямо в том же сообщении (иначе «Одобрить/Отклонить» висят и
         // создаётся впечатление задвоения). Кнопки исчезают, остаётся итог.
-        if (!empty($this->input['message_id']) && !empty($this->input['chat'])) {
-            $done = $this->input['message'];
-            $this->update(
-                $this->input['chat'],
-                $this->input['message_id'],
-                ($done !== '' ? $done . "\n" : '') . '✅ ' . $this->i18n('user portal approved'),
-                false,
-            );
-        }
+        $this->collapseModerationCards($telegramId, '✅ ' . $this->i18n('user portal approved'));
         try {
             $this->send($telegramId, $this->i18n('user portal approved msg'));
         } catch (\Throwable $e) {
@@ -752,7 +1425,8 @@ trait UserPortalTrait
      * Контекст запроса (from/chat/message_id) временно подменяется на целевой
      * id, рендерится меню, затем восстанавливается. Сеансовая подпись
      * пользователя не затирается: у свеже-одобренного подписки ещё нет, поэтому
-     * getUserPortalSession вернёт null и покажет состояние «нет подписки».
+     * getUserPortalSession вернёт wg_only-сессию (запись approved=1) и покажет
+     * кабинет «только Амнезия» с кнопкой «Добавить конфиг».
      */
     protected function renderUserPortalAs(string $telegramId): void
     {
@@ -763,16 +1437,64 @@ trait UserPortalTrait
             'message'    => $this->input['message'] ?? null,
             'callback'   => $this->input['callback'] ?? null,
             'callback_id'=> $this->input['callback_id'] ?? null,
+            'username'   => $this->input['username'] ?? null,
+            'first_name' => $this->input['first_name'] ?? null,
+            'last_name'  => $this->input['last_name'] ?? null,
         ];
+        $wasAdmin = $this->admin;
+        $wasRenderingAsUser = $this->renderingAsUser;
         $this->input['from'] = $telegramId;
         $this->input['chat'] = $telegramId;
         $this->input['message_id'] = 0;
         $this->input['message'] = '';
         $this->input['callback'] = null;
         $this->input['callback_id'] = null;
+        // Подменяем и identity-поля на данные ЦЕЛЕВОГО пользователя, иначе
+        // recordUserPortalSeen(), вызываемый из userPortalMenu(), возьмёт имя/ник
+        // из контекста админа, который нажал кнопку — и чужой аккаунт получит
+        // данные админа в people-directory. Резолвим через getChat.
+        $identity = $this->resolveTelegramIdentity((string) $telegramId);
+        if (is_array($identity)) {
+            $this->input['username']   = trim((string) ($identity['username'] ?? ''));
+            $this->input['first_name'] = trim((string) ($identity['first_name'] ?? ''));
+            $this->input['last_name']  = trim((string) ($identity['last_name'] ?? ''));
+        } else {
+            $this->input['username']   = '';
+            $this->input['first_name'] = '';
+            $this->input['last_name']  = '';
+        }
+        // На время рендера кабинета юзера снимаем админский флаг:
+        // userPortalMenu() первой же проверкой if ($this->admin) вывел бы
+        // админ-панель вместо кабинета целевого пользователя.
+        $this->admin = false;
+        // Гасим уведомление «новый Старт» на время рендера «как другой
+        // пользователь»: иначе recordUserPortalSeen() разослал бы всем админам
+        // ложную заявку на каждое нажатие админом «Одобрить».
+        $this->renderingAsUser = true;
+        // Переключаем PHP-сессию на целевого пользователя. Сессия стартует в
+        // input() с id админа и к этому моменту уже активна, поэтому
+        // ensureUserPortalSession() сам её не переключит. Без переключения
+        // message_id заглушки «на рассмотрении» ищется в админской сессии, не
+        // находится — и userPortalShow() шлёт НОВОЕ сообщение, оставляя заглушку
+        // на месте (дубль из двух сообщений). Явно закрываем админскую сессию и
+        // открываем сессию цели.
+        $prevSessionId = session_id();
+        $hadSession = session_status() === PHP_SESSION_ACTIVE;
+        if ($hadSession) {
+            session_write_close();
+        }
+        session_id((string) $telegramId);
+        session_start();
         try {
             $this->userPortalMenu();
         } finally {
+            // Закрываем сессию цели (flush её message_id), затем возвращаем
+            // админскую сессию — остальной код запроса должен видеть админа.
+            session_write_close();
+            if ($hadSession && is_string($prevSessionId) && $prevSessionId !== '') {
+                session_id($prevSessionId);
+                session_start();
+            }
             foreach ($save as $k => $v) {
                 if ($v === null) {
                     unset($this->input[$k]);
@@ -780,6 +1502,116 @@ trait UserPortalTrait
                     $this->input[$k] = $v;
                 }
             }
+            $this->admin = $wasAdmin;
+            $this->renderingAsUser = $wasRenderingAsUser;
+        }
+    }
+
+    /**
+     * Каждый админ — ещё и одобренный пользователь портала: параллельная запись
+     * в каталоге. Создаётся автоматически при добавлении админа (addAdmin) и
+     * лениво при первом «Перейти как пользователь», если записи вдруг нет.
+     * Идемпотентна: поля подписки и выдачи не трогает — конфиг админ выдаёт
+     * себе сам через карточку. approved всегда = 1 (уже одобрен).
+     */
+    protected function ensureAdminUserRecord(string $telegramId): void
+    {
+        $telegramId = trim($telegramId);
+        if ($telegramId === '') {
+            return;
+        }
+        // Резолвим личность ДО блокировки pac.json: getChat — сетевой вызов,
+        // его нельзя держать под файловой блокировкой.
+        $identity = $this->resolveTelegramIdentity($telegramId);
+        $username = '';
+        $name     = '';
+        if (is_array($identity)) {
+            $username = trim((string) ($identity['username'] ?? ''));
+            $name     = trim((string) ($identity['first_name'] ?? '') . ' ' . (string) ($identity['last_name'] ?? ''));
+        }
+        $this->withPacLock(function () use ($telegramId, $username, $name): void {
+            $pac = $this->getPacConf();
+            $bindings = $this->getUserPortalBindings();
+            $prev = self::normalizeUserPortalBinding($bindings[$telegramId] ?? null);
+            $bindings[$telegramId] = [
+                'subscription_id' => $prev['subscription_id'],
+                'granted_at'      => $prev['granted_at'],
+                'activated'       => $prev['activated'],
+                'first_seen_at'   => $prev['first_seen_at'] ?: time(),
+                'username'        => $username !== '' ? $username : $prev['username'],
+                'name'            => $name !== '' ? $name : $prev['name'],
+                'approved'        => 1,
+                'empty_proto'     => $prev['empty_proto'],
+                'wg_limit'        => $prev['wg_limit'],
+                'expires_at'      => $prev['expires_at'],
+                'expiry_reminders'=> $prev['expiry_reminders'],
+            ];
+            $pac['user_portal_bindings'] = $bindings;
+            $this->setPacConf($pac);
+        });
+    }
+
+    /**
+     * Нажавший — владелец бота (admin[0] в config.php)? Владелец может удалить
+     * любого пользователя, включая себя; остальные админы себя удалить не могут.
+     */
+    protected function isUserPortalOwner(): bool
+    {
+        $configFile = dirname(__DIR__) . '/config.php';
+        if (!is_file($configFile)) {
+            return false;
+        }
+        $c = [];
+        require $configFile;
+        $owner = isset($c['admin'][0]) ? $c['admin'][0] : null;
+
+        return $owner !== null && (string) ($this->input['from'] ?? '') === (string) $owner;
+    }
+
+    /**
+     * Список telegram-id всех админов из config.php (как строки). Нужен, чтобы
+     * не-владелец админ не видел в каталоге портала других админов.
+     */
+    protected function getAdminTelegramIds(): array
+    {
+        $configFile = dirname(__DIR__) . '/config.php';
+        if (!is_file($configFile)) {
+            return [];
+        }
+        $c = [];
+        require $configFile;
+        $ids = is_array($c['admin'] ?? null) ? $c['admin'] : [];
+
+        return array_values(array_map('strval', $ids));
+    }
+
+    /**
+     * «Перейти как пользователь»: админ смотрит собственный кабинет портала.
+     * Лениво гарантируем его запись (approved=1), затем рендерим кабинет как
+     * обычному юзеру (admin=false + renderingAsUser, чтобы не сработала ложная
+     * заявка «новый Старт»). Кабинет при этом получает кнопку «Перейти в админку».
+     */
+    public function userPortalAsSelf()
+    {
+        if (!$this->admin) {
+            return;
+        }
+        $telegramId = (string) ($this->input['from'] ?? '');
+        if ($telegramId === '') {
+            return;
+        }
+        $this->ensureAdminUserRecord($telegramId);
+        $wasAdmin            = $this->admin;
+        $wasRenderingAsUser  = $this->renderingAsUser;
+        $this->admin           = false;
+        $this->renderingAsUser = true;
+        $this->renderingAsSelf = true;
+        try {
+            $this->userPortalMenu();
+        } finally {
+            $this->admin           = $wasAdmin;
+            $this->renderingAsUser = $wasRenderingAsUser;
+            $this->renderingAsSelf = false;
         }
     }
 
@@ -797,33 +1629,74 @@ trait UserPortalTrait
             return;
         }
         $record = self::normalizeUserPortalBinding($this->getUserPortalBindings()[$telegramId] ?? null);
-        if ((string) ($record['subscription_id'] ?? '') === '') {
-            // Никакой подписки ещё не выдано — просто сносим запись из каталога.
-            $this->removeUserPortalBinding($telegramId);
-        } else {
+        // Отказ фиксируем статусом approved = 2 у КАЖДОЙ заявки, в т.ч. без
+        // подписки. Прежний путь для пустой заявки сносил запись целиком, из-за
+        // чего отклонённый человек повторным /start заново создавал заявку и
+        // спамил всех админов «Новый пользователь нажал Старт», а экран
+        // «отклонено» для него не работал.
+        $this->withPacLock(function () use ($telegramId, $record): void {
             $pac = $this->getPacConf();
             $bindings = $this->getUserPortalBindings();
             $record['approved'] = 2;
+            $record['empty_proto'] = 0;
             $bindings[$telegramId] = $record;
             $pac['user_portal_bindings'] = $bindings;
             $this->setPacConf($pac);
-        }
+        });
+        // Уведомить остальных админов об отказе.
+        $this->notifyAdminDecision($telegramId, 'отклонил');
         // Свернуть карточку модерации у админа: убрать кнопки, зафиксировать отказ.
-        if (!empty($this->input['message_id']) && !empty($this->input['chat'])) {
-            $done = $this->input['message'];
-            $this->update(
-                $this->input['chat'],
-                $this->input['message_id'],
-                ($done !== '' ? $done . "\n" : '') . '❌ ' . $this->i18n('user portal rejected'),
-                false,
-            );
-        }
+        $this->collapseModerationCards($telegramId, '❌ ' . $this->i18n('user portal rejected'));
         // Человеку сообщаем об отказе, но после этого — никаких дальнейших
         // уведомлений в этот бот: заявка закрыта.
         try {
             $this->send($telegramId, $this->i18n('user portal rejected msg'));
         } catch (\Throwable $e) {
         }
+    }
+
+    /**
+     * Админ ошибочно отклонил заявку и хочет её вернуть. Сбрасываем approved
+     * обратно в «на рассмотрении» (0), сообщаем человеку, перерисовываем его
+     * кабинет и уведомляем остальных админов о возврате.
+     */
+    public function userPortalRestore(string $telegramId)
+    {
+        if (!$this->admin) {
+            return;
+        }
+        $telegramId = trim($telegramId);
+        if (!preg_match('~^\d{5,}$~', $telegramId)) {
+            return;
+        }
+        $record = self::normalizeUserPortalBinding($this->getUserPortalBindings()[$telegramId] ?? null);
+        // Возвращаем только реально отклонённую заявку: approved === 2. Иначе
+        // кнопка ничего не меняет (защита от повторного нажатия).
+        if ((int) $record['approved'] !== 2) {
+            return;
+        }
+        $this->withPacLock(function () use ($telegramId, $record): void {
+            $pac = $this->getPacConf();
+            $bindings = $this->getUserPortalBindings();
+            $record['approved'] = 0;
+            $bindings[$telegramId] = $record;
+            $pac['user_portal_bindings'] = $bindings;
+            $this->setPacConf($pac);
+        });
+        // Уведомить остальных админов о возврате.
+        $this->notifyAdminDecision($telegramId, 'вернул');
+        // Человеку — что его заявку вернули на рассмотрение.
+        try {
+            $this->send($telegramId, $this->i18n('user portal restored msg'));
+        } catch (\Throwable $e) {
+        }
+        // Перерисовать человеку его кабинет (снова «на рассмотрении»).
+        try {
+            $this->renderUserPortalAs($telegramId);
+        } catch (\Throwable $e) {
+        }
+        // Открыть карточку — теперь это снова pending-заявка.
+        $this->userPortalCard($telegramId);
     }
 
     /**
@@ -884,6 +1757,8 @@ trait UserPortalTrait
         } catch (\Throwable $e) {
             $this->userPortalSetFlash('⚠️ ' . $this->i18n('user portal write failed'));
         }
+        // Уведомить остальных админов, что по заявке написали (заявка движется).
+        $this->notifyAdminDecision($telegramId, 'написал');
         // После отправки админ возвращается в карточку той же заявки, а не в
         // user-меню: userPortalMenu() для админа (без сессии) рисует «нет
         // доступа» + кнопки подписок, что и выглядело как задвоенное меню.
@@ -989,25 +1864,29 @@ trait UserPortalTrait
      */
     protected function markUserPortalActivated(string $telegramId): void
     {
-        $record = self::normalizeUserPortalBinding($this->getUserPortalBindings()[$telegramId] ?? null);
-        if ($record['subscription_id'] === '') {
-            return;
-        }
-        $record['activated'] = true;
-        $pac = $this->getPacConf();
-        $bindings = $this->getUserPortalBindings();
-        $bindings[$telegramId] = $record;
-        $pac['user_portal_bindings'] = $bindings;
-        $this->setPacConf($pac);
+        $this->withPacLock(function () use ($telegramId): void {
+            $record = self::normalizeUserPortalBinding($this->getUserPortalBindings()[$telegramId] ?? null);
+            if ($record['subscription_id'] === '') {
+                return;
+            }
+            $record['activated'] = true;
+            $pac = $this->getPacConf();
+            $bindings = $this->getUserPortalBindings();
+            $bindings[$telegramId] = $record;
+            $pac['user_portal_bindings'] = $bindings;
+            $this->setPacConf($pac);
+        });
     }
 
     protected function removeUserPortalBinding(string $telegramId): void
     {
-        $pac = $this->getPacConf();
-        $bindings = $this->getUserPortalBindings();
-        unset($bindings[$telegramId]);
-        $pac['user_portal_bindings'] = $bindings;
-        $this->setPacConf($pac);
+        $this->withPacLock(function () use ($telegramId): void {
+            $pac = $this->getPacConf();
+            $bindings = $this->getUserPortalBindings();
+            unset($bindings[$telegramId]);
+            $pac['user_portal_bindings'] = $bindings;
+            $this->setPacConf($pac);
+        });
     }
 
     protected function getUserPortalBindingTelegramIds(string $subscriptionId): array
@@ -1042,13 +1921,16 @@ trait UserPortalTrait
         if ($subscriptionId === '' || !in_array($kind, ['vless', 'wg'], true) || $amount < 1) {
             return 0;
         }
-        $pac = $this->getPacConf();
-        $ledger = is_array($pac['user_portal_issued'] ?? null) ? $pac['user_portal_issued'] : [];
-        $count = (int) ($ledger[$subscriptionId][$kind] ?? 0);
-        $count += $amount;
-        $ledger[$subscriptionId][$kind] = $count;
-        $pac['user_portal_issued'] = $ledger;
-        $this->setPacConf($pac);
+        $count = 0;
+        $this->withPacLock(function () use ($subscriptionId, $kind, $amount, &$count): void {
+            $pac = $this->getPacConf();
+            $ledger = is_array($pac['user_portal_issued'] ?? null) ? $pac['user_portal_issued'] : [];
+            $count = (int) ($ledger[$subscriptionId][$kind] ?? 0);
+            $count += $amount;
+            $ledger[$subscriptionId][$kind] = $count;
+            $pac['user_portal_issued'] = $ledger;
+            $this->setPacConf($pac);
+        });
         return $count;
     }
 
@@ -1173,7 +2055,17 @@ trait UserPortalTrait
         // VLESS-зависимых строк (трафик/лимит/пароль). Вариант А из развилки.
         $wgClients = $this->userPortalIssuedWgClientsByTg($telegramId);
         if ($wgClients === []) {
-            return null;
+            // Ни подписки, ни выданных WG-конфигов. Раньше это значило «нет
+            // доступа». С self-add одобренному пользователю (запись есть,
+            // approved=1) всё равно нужен кабинет с «Добавить конфиг» — иначе
+            // он видит «нет подписки» и не может сам создать первый конфиг.
+            // Свежих/неодобренных (pending/rejected) сюда не пускаем: их держит
+            // заглушка «на рассмотрении/отклонено» в userPortalMenu().
+            $record = self::normalizeUserPortalBinding($this->getUserPortalBindings()[$telegramId] ?? null);
+            $hasRecord = (int) ($record['first_seen_at'] ?? 0) > 0 || (string) ($record['subscription_id'] ?? '') !== '';
+            if (!$hasRecord || (int) ($record['approved'] ?? 1) !== 1) {
+                return null;
+            }
         }
 
         return [
@@ -1412,20 +2304,52 @@ trait UserPortalTrait
         // Записать не-админа в people-directory при первом заходе (/start /menu /update).
         $this->recordUserPortalSeen((string) ($this->input['from'] ?? ''));
 
-        // Пока админ не одобрил заявку, не-админ видит только заглушку «на
-        // модерации» — не сам кабинет и не стандартный «нет доступа».
+        // /start, /menu, /update — всегда новое сообщение, а не правка старого
+        // кабинета. Раньше этот сброс стоял после pending-ветки, поэтому у
+        // заявителя повторный /start правил старую заглушку, а не выводил свежее меню.
+        if (preg_match('~^/(?:start|menu|update)$~', (string) ($this->input['message'] ?? ''))) {
+            unset($_SESSION['userPortalUi']['message_id']);
+        }
+
+        // Пока админ не одобрил заявку, не-админ видит только заглушку: «на
+        // рассмотрении» для новой заявки, «отклонено» для отклонённой — не сам
+        // кабинет и не стандартный «нет доступа».
         if (!$this->admin && !$this->isUserPortalApproved((string) ($this->input['from'] ?? ''))) {
+            $tgId = (string) ($this->input['from'] ?? '');
+            $record = self::normalizeUserPortalBinding($this->getUserPortalBindings()[$tgId] ?? null);
+            $rejected = (int) ($record['approved'] ?? 1) === 2;
+            $halfApproved = !$rejected && (int) ($record['empty_proto'] ?? 0) === 1;
+            if ($halfApproved) {
+                // «Полуодобренный кабинет»: админ выдал empty proto, но заявка
+                // ещё не одобрена. Показываем MTProto-ссылку + «Обновить» +
+                // «Поддержку» — без остального кабинета (подписки ещё нет).
+                $text = [$this->i18n('user portal title')];
+                $text[] = $this->i18n('user portal half approved');
+                $link = method_exists($this, 'linkMtproto') ? (string) $this->linkMtproto() : '';
+                if ($link !== '') {
+                    $text[] = '';
+                    $text[] = $this->i18n('user portal empty proto title') . ':';
+                    $text[] = '<pre><code>' . htmlspecialchars($link, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</code></pre>';
+                }
+                $data = [];
+                $data[] = [[
+                    'text'          => $this->i18n('update'),
+                    'callback_data' => '/userPortal',
+                ]];
+                $data[] = [[
+                    'text'          => $this->i18n('user portal support title'),
+                    'callback_data' => '/userPortalSupport',
+                ]];
+                $this->userPortalShow(implode("\n", $text), $data);
+                return;
+            }
             $text = [$this->i18n('user portal title')];
-            $text[] = $this->i18n('user portal pending');
+            $text[] = $this->i18n($rejected ? 'user portal rejected pending' : 'user portal pending');
             $this->userPortalShow(implode("\n", $text), [[
                 'text'          => $this->i18n('user portal support title'),
                 'callback_data' => '/userPortalSupport',
             ]]);
             return;
-        }
-
-        if (preg_match('~^/(?:start|menu|update)$~', (string) ($this->input['message'] ?? ''))) {
-            unset($_SESSION['userPortalUi']['message_id']);
         }
 
         $session = $this->getUserPortalSession();
@@ -1452,10 +2376,14 @@ trait UserPortalTrait
                 $wgCount = count($this->userPortalIssuedWgClientsByTg($tgId));
                 $text[] = $this->i18n('user portal issued title') . ':';
                 $text[] = '· Amnezia/WG — ' . $wgCount . ' ' . $this->i18n('user portal issued wg');
+                $expiresAt = $tgId !== '' ? $this->getUserPortalExpiry($tgId) : 0;
+                if ($expiresAt > 0) {
+                    $text[] = $this->i18n('user portal expires') . ': ' . date('d.m.Y H:i', $expiresAt) . ' (' . $this->getTime($expiresAt) . ')';
+                } else {
+                    $text[] = $this->i18n('user portal expires') . ': ' . $this->i18n('user portal no expiry');
+                }
             } else {
-                $text = array_merge($text, $this->buildUserPortalAccountInfoLines($session));
-                $text[] = '';
-                $text = array_merge($text, $this->buildUserProtocolCardLines($session));
+                $text = array_merge($text, $this->buildUserPortalSummaryLines($session));
             }
         } else {
             $text[] = $this->getUserPortalNoAccessText();
@@ -1466,45 +2394,26 @@ trait UserPortalTrait
             // Без подписки кнопку «Обновить ссылку» не показываем вообще —
             // только «Поддержку» (добавляется ниже) и текст-заглушку.
         } elseif (!empty($session['wg_only'])) {
-            // Упрощённый кабинет «только Амнезия»: одна кнопка «Мои конфиги
-            // Амнезия» (если есть) — без устройств, ссылок, пароля и проверки,
-            // потому что всё это про VLESS-подписку, которой у юзера нет.
-            if ($this->userPortalIssuedWgClientsByTg((string) ($session['telegram_id'] ?? '')) !== []) {
-                $data[] = [[
-                    'text'          => $this->i18n('user portal issued wg menu'),
-                    'callback_data' => '/userPortalIssuedWg',
-                ]];
-            }
+            // Упрощённый кабинет «только Амнезия»: кнопка «Мои конфиги Амнезия»
+            // видна всегда (даже при 0 — внутри пустое состояние «можно добавить»)
+            // + «Добавить конфиг». Устройств, ссылок, пароля и проверки нет:
+            // всё это про VLESS-подписку, которой у юзера нет.
+            $data[] = [[
+                'text'          => $this->i18n('user portal issued wg menu'),
+                'callback_data' => '/userPortalIssuedWg',
+            ]];
         } else {
+            // Верхний уровень — только «Подписка VLESS» и «Мои конфиги».
+            // Ссылки, устройства, пароль и проверка уехали внутрь подписки
+            // (userPortalSubscription): верх кабинета больше не перегружен.
             $data[] = [[
-                'text'          => $this->i18n('user portal my devices'),
-                'callback_data' => '/userPortalDevices',
-            ]];
-            if ($this->userPortalIssuedWgClients((string) $session['subscription_id']) !== []) {
-                $data[] = [[
-                    'text'          => $this->i18n('user portal issued wg menu'),
-                    'callback_data' => '/userPortalIssuedWg',
-                ]];
-            }
-            $links = $this->buildUserSubscriptionLinks($session['subscription_id']);
-            $text[] = '';
-            $text[] = $this->i18n('user portal new page link') . ':';
-            $text[] = $links['page'];
-            $text[] = '';
-            $text[] = $this->i18n('user portal new clash link') . ':';
-            $text[] = $links['clash'];
-
-            $data[] = [[
-                'text'          => $this->hasSubscriptionDevicePassword($session['client'])
-                    ? $this->i18n('user portal change password')
-                    : $this->i18n('user portal set password'),
-                'callback_data' => '/userPortalPassword',
+                'text'          => $this->i18n('user portal my subscription vless'),
+                'callback_data' => '/userPortalSubscription',
             ]];
             $data[] = [[
-                'text'          => $this->i18n('user portal check'),
-                'callback_data' => '/userPortalCheck',
+                'text'          => $this->i18n('user portal issued wg menu'),
+                'callback_data' => '/userPortalIssuedWg',
             ]];
-
         }
 
         // «empty proto» (MTProto-ссылка) показывается всегда — она не зависит
@@ -1517,10 +2426,27 @@ trait UserPortalTrait
             ],
         ];
 
+        // Кнопка «Обновить» — та же перерисовка кабинета, что /update, но
+        // inline: юзеру не нужно вводить команду руками. callback /userPortal
+        // ведёт в userPortalMenu(), а userPortalShow() отредактирует сообщение
+        // свежими данными либо (если ничего не менялось) покажет тост «уже
+        // актуально».
+        $data[] = [[
+            'text'          => $this->i18n('update'),
+            'callback_data' => '/userPortal',
+        ]];
+
         $data[] = [[
             'text'          => $this->i18n('user portal support title'),
             'callback_data' => '/userPortalSupport',
         ]];
+
+        if (!empty($this->renderingAsSelf)) {
+            $data[] = [[
+                'text'          => $this->i18n('user portal back to admin'),
+                'callback_data' => '/userPortalUsers',
+            ]];
+        }
 
         $this->userPortalShow(implode("\n", $text), $data);
     }
@@ -1826,6 +2752,66 @@ trait UserPortalTrait
         $this->userPortalMenu();
     }
 
+    public function userPortalSubscription()
+    {
+        $session = $this->getUserPortalSession();
+        if ($session === null) {
+            $this->ackCallback($this->i18n('user portal bind first'), true);
+            $this->userPortalPromptInput(
+                $this->i18n('user portal bind first') . "\n\n" . $this->i18n('user portal send old link'),
+                'userPortalImportLink',
+                [],
+            );
+
+            return;
+        }
+
+        $ownerSubId = (string) $session['subscription_id'];
+        $links = $this->buildUserSubscriptionLinks($ownerSubId);
+
+        // Экран подписки: ссылка-кнопка (открывается тапом, копируется
+        // долгим нажатием), устройства, пароль и проверка — всё внутри.
+        // Сюда же уехала карточка протоколов (VLESS/AmneziaWG/Hysteria2),
+        // чтобы верх кабинета оставался компактной сводкой.
+        $text = [$this->i18n('user portal my subscription vless')];
+        $text[] = '';
+        $text = array_merge($text, $this->buildUserProtocolCardLines($session));
+
+        $data = [];
+        if ($links['page'] !== '') {
+            $data[] = [[
+                'text' => $this->i18n('user portal new page link'),
+                'url'  => $links['page'],
+            ]];
+        }
+        if ($links['clash'] !== '') {
+            $data[] = [[
+                'text' => $this->i18n('user portal new clash link'),
+                'url'  => $links['clash'],
+            ]];
+        }
+        $data[] = [[
+            'text'          => $this->i18n('user portal my devices'),
+            'callback_data' => '/userPortalDevices',
+        ]];
+        $data[] = [[
+            'text'          => $this->hasSubscriptionDevicePassword($session['client'])
+                ? $this->i18n('user portal change password')
+                : $this->i18n('user portal set password'),
+            'callback_data' => '/userPortalPassword',
+        ]];
+        $data[] = [[
+            'text'          => $this->i18n('user portal check'),
+            'callback_data' => '/userPortalCheck',
+        ]];
+        $data[] = [[
+            'text'          => $this->i18n('back'),
+            'callback_data' => '/userPortal',
+        ]];
+
+        $this->userPortalShow(implode("\n", $text), $data);
+    }
+
     public function userPortalDevices($page = 0)
     {
         $session = $this->getUserPortalSession();
@@ -2106,6 +3092,8 @@ trait UserPortalTrait
         $link = method_exists($this, 'linkMtproto') ? (string) $this->linkMtproto() : '';
 
         $text = [$this->i18n('user portal empty proto title')];
+        $text[] = '';
+        $text[] = $this->i18n('user portal empty proto how');
         $text[] = '';
         if ($link === '') {
             $text[] = $this->i18n('user portal empty proto empty');
@@ -2819,17 +3807,24 @@ PROBE;
 
     public function toggleUserPortal()
     {
-        $pac = $this->getPacConf();
-        $pac['user_portal_enabled'] = !empty($pac['user_portal_enabled']) ? 0 : 1;
-        $this->setPacConf($pac);
+        $this->withPacLock(function (): void {
+            $pac = $this->getPacConf();
+            $pac['user_portal_enabled'] = !empty($pac['user_portal_enabled']) ? 0 : 1;
+            $this->setPacConf($pac);
+        });
         $this->ackCallback('user portal: ' . $this->i18n(!empty($pac['user_portal_enabled']) ? 'on' : 'off'), true);
         $this->menu('config');
     }
 
-    public function userPortalUsers(int $page = 0)
+    public function userPortalUsers(int $page = -1)
     {
         if (!$this->admin) {
             return;
+        }
+        // «Назад в список» из карточки/подэкранов зовёт userPortalUsers() без
+        // аргумента — возвращаемся на последнюю активную страницу, а не на 1-ю.
+        if ($page < 0) {
+            $page = $this->userPortalBackPage('users');
         }
         $perPage = 8;
         $text = [];
@@ -2839,10 +3834,34 @@ PROBE;
         }
         $text[] = $this->i18n('user portal users title') . ':';
         $rows = $this->getUserPortalDirectory();
+        // «Пользователи» = только одобренные (approved === 1). Pending-заявки
+        // (0) и отклонённые (2) живут в разделе «Заявки», а не дублируются здесь.
+        $approved = [];
+        foreach ($rows as $rk => $rv) {
+            if ((int) ($rv['approved'] ?? 1) === 1) {
+                $approved[$rk] = $rv;
+            }
+        }
+        $rows = $approved;
+        // Не-владелец админ не видит в каталоге других админов — только обычных
+        // пользователей и самого себя. Владелец видит всех.
+        if (!$this->isUserPortalOwner()) {
+            $adminIds = $this->getAdminTelegramIds();
+            $self     = (string) ($this->input['from'] ?? '');
+            $rows = array_filter($rows, function (array $r) use ($adminIds, $self): bool {
+                $tg = (string) ($r['telegram_id'] ?? '');
+                if ($tg === '' || !in_array($tg, $adminIds, true)) {
+                    return true;
+                }
+
+                return $tg === $self;
+            });
+        }
         $keys = array_keys($rows);
         $total = count($keys);
         $pages = (int) max(1, ceil($total / $perPage));
         $page = max(0, min($page, $pages - 1));
+        $this->userPortalSetBackPage(['users' => $page, 'requests' => $this->userPortalBackPage('requests')]);
         $slice = array_slice($keys, $page * $perPage, $perPage, true);
         if (empty($rows)) {
             $text[] = $this->i18n('user portal users empty');
@@ -2851,9 +3870,10 @@ PROBE;
             // editMessageText падает «message is too long» и кнопки не рендерятся.
             foreach ($slice as $key) {
                 $r = $rows[$key];
-                $status = !empty($r['activated']) ? $this->i18n('user portal activated') : $this->i18n('user portal not activated');
+                $counts = $this->userPortalIssuedCounts($r);
                 $name = $this->userPortalDisplayName($r);
-                $text[] = '· ' . htmlspecialchars($name, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . ' — ' . $status;
+                $text[] = '· ' . htmlspecialchars($name, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+                    . ' — VLESS ' . $counts['vless'] . ' · Amnezia ' . $counts['wg'];
             }
             $text[] = '';
             $text[] = $this->i18n('user portal page') . ': ' . ($page + 1) . ' / ' . $pages;
@@ -2863,7 +3883,7 @@ PROBE;
             $name = $this->userPortalDisplayName($rows[$key]);
             $buttons[] = [[
                 'text'          => $name,
-                'callback_data' => '/userPortalCard ' . rawurlencode((string) $key),
+                'callback_data' => '/userPortalCard ' . rawurlencode((string) $key . '_' . $page),
             ]];
         }
         if ($pages > 1) {
@@ -2889,6 +3909,10 @@ PROBE;
             'callback_data' => '/userPortalGrantPrompt',
         ]];
         $buttons[] = [[
+            'text'          => $this->i18n('user portal view as user'),
+            'callback_data' => '/userPortalAsSelf',
+        ]];
+        $buttons[] = [[
             'text'          => $this->i18n('back'),
             'callback_data' => '/menu config',
         ]];
@@ -2896,21 +3920,24 @@ PROBE;
     }
 
     /**
-     * Раздел «Заявки»: только люди, по которым ещё не принято решение
-     * (approved === 0). Из карточки каждой заявки админ может одобрить,
-     * отклонить или написать — кнопки «Одобрить/Отклонить/Написать» живут в
-     * userPortalCard для pending, так что здесь достаточно вести на карточку.
+     * Раздел «Заявки»: ожидающие решения (approved === 0) и отклонённые
+     * (approved === 2 — пока админ не удалит их полностью). Из карточки заявки
+     * админ одобряет, отклоняет, возвращает или удаляет. Отклонённый висит
+     * здесь со статусом «Отклонено».
      */
-    public function userPortalRequests(int $page = 0)
+    public function userPortalRequests(int $page = -1)
     {
         if (!$this->admin) {
             return;
+        }
+        if ($page < 0) {
+            $page = $this->userPortalBackPage('requests');
         }
         $perPage = 8;
         $rows = $this->getUserPortalDirectory();
         $pending = [];
         foreach ($rows as $key => $r) {
-            if ((int) ($r['approved'] ?? 1) === 0) {
+            if ((int) ($r['approved'] ?? 1) === 0 || (int) ($r['approved'] ?? 1) === 2) {
                 $pending[$key] = $r;
             }
         }
@@ -2918,6 +3945,7 @@ PROBE;
         $total  = count($keys);
         $pages  = (int) max(1, ceil($total / $perPage));
         $page   = max(0, min($page, $pages - 1));
+        $this->userPortalSetBackPage(['requests' => $page, 'users' => $this->userPortalBackPage('users')]);
         $slice  = array_slice($keys, $page * $perPage, $perPage, true);
 
         $text = [];
@@ -2930,7 +3958,12 @@ PROBE;
             $text[] = $this->i18n('user portal requests empty');
         } else {
             foreach ($slice as $key) {
-                $text[] = '· ' . htmlspecialchars($this->userPortalDisplayName($pending[$key]), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+                $r = $pending[$key];
+                $line = '· ' . htmlspecialchars($this->userPortalDisplayName($r), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+                if ((int) ($r['approved'] ?? 1) === 2) {
+                    $line .= ' — ' . $this->i18n('user portal rejected');
+                }
+                $text[] = $line;
             }
             $text[] = '';
             $text[] = $this->i18n('user portal page') . ': ' . ($page + 1) . ' / ' . $pages;
@@ -2940,7 +3973,7 @@ PROBE;
         foreach ($slice as $key) {
             $buttons[] = [[
                 'text'          => $this->userPortalDisplayName($pending[$key]),
-                'callback_data' => '/userPortalCard ' . rawurlencode((string) $key),
+                'callback_data' => '/userPortalCard ' . rawurlencode((string) $key . '_' . $page),
             ]];
         }
         if ($pages > 1) {
@@ -2993,6 +4026,14 @@ PROBE;
             return;
         }
         $key = rawurldecode($key);
+        // Кнопка человека в списке (заявки/пользователи) несёт
+        // «<key>_<page>», чтобы «Назад» возвращал на ту же страницу списка,
+        // а не сбрасывал на первую.
+        $backPage = 0;
+        if (preg_match('~^(.*)_(\d+)$~', $key, $m)) {
+            $key      = $m[1];
+            $backPage = (int) $m[2];
+        }
         $resolved = $this->resolveUserPortalCardRow($key);
         if ($resolved === null) {
             $this->userPortalSetFlash('⚠️ ' . $this->i18n('user portal grant not found'));
@@ -3005,6 +4046,15 @@ PROBE;
         $subId = (string) ($row['subscription_id'] ?? '');
         $tgId = (string) ($row['telegram_id'] ?? '');
 
+        // Помним страницу списка, с которого открыта карточка, чтобы возврат
+        // из подэкранов (выдача/отзыв/удаление) вёл на ту же страницу.
+        $approvedNum = (int) ($row['approved'] ?? 1);
+        if ($approvedNum === 0 || $approvedNum === 2) {
+            $this->userPortalSetBackPage(['requests' => $backPage]);
+        } else {
+            $this->userPortalSetBackPage(['users' => $backPage]);
+        }
+
         $text = [];
         $flash = $this->userPortalTakeFlash();
         if ($flash !== '') {
@@ -3016,21 +4066,23 @@ PROBE;
         }
         if ($subId !== '') {
             $text[] = $this->i18n('user portal grant sub') . ': <code>' . htmlspecialchars($subId, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</code>';
-            $status = !empty($row['activated']) ? $this->i18n('user portal activated') : $this->i18n('user portal not activated');
-            $text[] = $this->i18n('user portal status') . ': ' . $status;
-        } else {
-            // Без VLESS-подписки человек всё равно может иметь Amnezia/WG-конфиги,
-            // привязанные по telegram id. Показываем счёт, а не «никому не выдан».
-            $tgWgCount = $tgId !== '' ? count($this->userPortalIssuedWgClientsByTg($tgId)) : 0;
-            if ($tgWgCount > 0) {
-                $text[] = '· Amnezia/WG — ' . $tgWgCount . ' ' . $this->i18n('user portal issued wg');
-            } else {
-                $text[] = $this->i18n('user portal grant empty');
-            }
+        }
+        // Счётчик «сколько выдано» вместо вводящего в заблуждение «активен/не
+        // активен»: человек без VLESS-подписки всё равно может владеть Amnezia/WG.
+        // Рядом — лимит конфигов Amnezia (per-user override или глобальный дефолт).
+        $counts = $this->userPortalIssuedCounts($row);
+        $wgLimit = $tgId !== '' ? $this->getUserPortalWgLimit($tgId) : 0;
+        $text[] = $this->i18n('user portal issued count') . ': VLESS ' . $counts['vless'] . ' · Amnezia ' . $counts['wg'] . ($wgLimit > 0 ? ' / ' . $this->i18n('user portal wg limit') . ' ' . $wgLimit : '');
+        if ($tgId !== '') {
+            $text[] = $this->i18n('user portal expires') . ': ' . $this->userPortalExpiryText($this->getUserPortalExpiry($tgId));
         }
 
         $data = [];
-        $pending = (int) ($row['approved'] ?? 1) === 0;
+        $pending  = (int) ($row['approved'] ?? 1) === 0;
+        $rejected = (int) ($row['approved'] ?? 1) === 2;
+        if ($rejected) {
+            $text[] = $this->i18n('user portal status') . ': ' . $this->i18n('user portal rejected');
+        }
         if ($pending) {
             // Заявка (ещё не одобрена) — ровно 4 кнопки: Одобрить / Написать /
             // Выдать empty proto / Отклонить. «Выдать подписку»/«Amnezia» здесь
@@ -3049,17 +4101,46 @@ PROBE;
                     'text'          => '❌ Отклонить',
                     'callback_data' => '/userPortalReject ' . $tgId,
                 ]];
+                $data[] = [[
+                    'text'          => $this->i18n('back'),
+                    'callback_data' => '/userPortalRequests ' . $backPage,
+                ]];
             } else {
                 $data[] = [[
                     'text'          => $this->i18n('back'),
-                    'callback_data' => '/userPortalUsers',
+                    'callback_data' => '/userPortalRequests ' . $backPage,
                 ]];
             }
+        } elseif ($rejected) {
+            // Отклонённая заявка: статус «Отклонено» + «Вернуть» (если отклонили
+            // ошибочно) и «Удалить» (удалить полностью). Выдачи/отзыва здесь нет.
+            if ($tgId !== '') {
+                $data[] = [[
+                    'text'          => $this->i18n('user portal restore'),
+                    'callback_data' => '/userPortalRestore ' . $tgId,
+                ], [
+                    'text'          => '✉️ Написать',
+                    'callback_data' => '/userPortalWriteTo ' . $tgId,
+                ]];
+                $data[] = [[
+                    'text'          => $this->i18n('user portal delete user'),
+                    'callback_data' => '/userPortalCardDelete ' . rawurlencode($canonicalKey),
+                ]];
+            }
+            $data[] = [[
+                'text'          => $this->i18n('back'),
+                'callback_data' => '/userPortalRequests ' . $backPage,
+            ]];
         } else {
             // Одобренный пользователь — меню выдачи + «Отозвать» (открывает
             // выбор: VLESS / Amnezia / всё). Руслан: «в карточке кнопка отозвать,
             // и там выбор — если есть и VLESS и Amnezia, отзываю и то и другое
             // или что-то одно; если только Amnezia — отзываю конфиг».
+            // Владелец удаляет любого (включая себя); остальные админы удаляют
+            // чужих пользователей, но себя — не могут (только отозвать свои
+            // конфиги). Кнопку «Удалить» прячем на собственной карточке не-владельца.
+            $viewingSelf = $tgId !== '' && (string) $tgId === (string) ($this->input['from'] ?? '');
+            $canDelete   = $this->isUserPortalOwner() || !$viewingSelf;
             if ($tgId !== '') {
                 $data[] = [[
                     'text'          => $this->i18n('user portal issue vless'),
@@ -3068,12 +4149,26 @@ PROBE;
                     'text'          => $this->i18n('user portal issue wg'),
                     'callback_data' => '/userPortalCardWg ' . rawurlencode($canonicalKey),
                 ]];
-                $data[] = [[
+                $middle = [[
                     'text'          => '✉️ Написать',
                     'callback_data' => '/userPortalWriteTo ' . $tgId,
                 ], [
                     'text'          => $this->i18n('user portal empty proto'),
                     'callback_data' => '/userPortalCardEmptyProto ' . rawurlencode($canonicalKey),
+                ]];
+                if ($canDelete) {
+                    $middle[] = [
+                        'text'          => $this->i18n('user portal delete user'),
+                        'callback_data' => '/userPortalCardDelete ' . rawurlencode($canonicalKey),
+                    ];
+                }
+                $data[] = $middle;
+                $data[] = [[
+                    'text'          => $this->i18n('user portal wg limit') . ': ' . $wgLimit,
+                    'callback_data' => '/userPortalWgLimit ' . rawurlencode($canonicalKey),
+                ], [
+                    'text'          => $this->i18n('user portal expiry') . ': ' . $this->userPortalExpiryText($this->getUserPortalExpiry($tgId)),
+                    'callback_data' => '/userPortalExpiry ' . rawurlencode($canonicalKey),
                 ]];
                 $data[] = [[
                     'text'          => $this->i18n('user portal grant revoke'),
@@ -3082,7 +4177,7 @@ PROBE;
             }
             $data[] = [[
                 'text'          => $this->i18n('back'),
-                'callback_data' => '/userPortalUsers',
+                'callback_data' => '/userPortalUsers ' . $backPage,
             ]];
         }
         $this->update($this->input['chat'], $this->input['message_id'], implode("\n", $text), $data);
@@ -3121,16 +4216,38 @@ PROBE;
         // deliverPortalConfig (тот маршрутизирует по привязке subscription_id,
         // которой у пустой заявки может не быть).
         if ($tgId !== '') {
-            $text = '<b>' . $this->i18n('user portal empty proto title') . '</b>' . "\n"
+            $text = '<b>' . $this->i18n('user portal empty proto title') . '</b>' . "\n\n"
+                . $this->i18n('user portal empty proto how') . "\n\n"
                 . '<pre><code>' . htmlspecialchars($link, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</code></pre>';
             try {
                 $this->send((int) $tgId, $text);
             } catch (\Throwable $e) {
                 // Не фатально: доставка ссылки не должна ломать карточку.
             }
+
+            // Пометить заявку «полуодобренной»: пустой прото выдан, но approved
+            // не трогаем — заявка остаётся в списке, пока админ не одобрит/отклонит.
+            $this->withPacLock(function () use ($tgId): void {
+                $pac = $this->getPacConf();
+                $bindings = $this->getUserPortalBindings();
+                $record = self::normalizeUserPortalBinding($bindings[$tgId] ?? null);
+                $record['empty_proto'] = 1;
+                $bindings[$tgId] = $record;
+                $pac['user_portal_bindings'] = $bindings;
+                $this->setPacConf($pac);
+            });
+
+            // Подтверждение админам, что ссылка доставлена. Заявка при этом
+            // остаётся в списке: это не одобрение и не отказ, approved не трогаем.
+            $this->notifyAdminIssue($this->userPortalWriteTargetName($tgId), 'link');
+
+            // Перерисовать человеку его кабинет — у него появилась empty proto
+            // ссылка, меню (со «Поддержкой») должно стать актуальным.
+            $this->renderUserPortalAs($tgId);
+
+            $this->userPortalSetFlash('✅ ' . $this->i18n('user portal empty proto delivered'));
         }
 
-        $this->userPortalSetFlash('✅ ' . $this->i18n('user portal issue config ok'));
         $this->userPortalCard($key);
     }
 
@@ -3232,30 +4349,25 @@ PROBE;
         $text = ['<b>' . htmlspecialchars($name, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</b>'];
         $text[] = $this->i18n('user portal revoke menu');
 
+        // Выбор по принципу выдачи: VLESS и/или Amnezia одной кнопкой каждый.
+        // Конкретный конфиг Amnezia выбирается дальше мультивыбором
+        // (userPortalWgRevokePick), а не списком кнопок здесь.
         $data = [];
         if ($hasVless) {
             $data[] = [[
-                'text'          => $this->i18n('user portal issue vless') . ' — ' . $this->i18n('user portal grant revoke'),
+                'text'          => 'VLESS — ' . $this->i18n('user portal grant revoke'),
                 'callback_data' => '/userPortalCardRevokeVless ' . rawurlencode($canonicalKey),
             ]];
         }
         if (!empty($wgClients)) {
-            foreach ($wgClients as $i => $item) {
-                $label = $item['name'] !== '' ? $item['name'] : ('WG ' . ($i + 1));
-                $data[] = [[
-                    'text'          => 'Amnezia · ' . $label . ' — ' . $this->i18n('user portal revoke wg'),
-                    'callback_data' => '/userPortalWgRevoke ' . $item['index'] . ' ' . rawurlencode($canonicalKey),
-                ]];
-                $text[] = '· Amnezia: ' . htmlspecialchars($label, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-            }
+            $data[] = [[
+                'text'          => 'Amnezia — ' . $this->i18n('user portal grant revoke'),
+                'callback_data' => '/userPortalWgRevokePick ' . rawurlencode($canonicalKey),
+            ]];
         }
         $data[] = [[
-            'text'          => $this->i18n('user portal delete user'),
-            'callback_data' => '/userPortalCardDelete ' . rawurlencode($canonicalKey),
-        ]];
-        $data[] = [[
             'text'          => $this->i18n('back'),
-            'callback_data' => '/userPortalCard ' . rawurlencode($canonicalKey),
+            'callback_data' => '/userPortalCard ' . rawurlencode($canonicalKey . '_' . $this->userPortalBackPage('users')),
         ]];
 
         $this->update($this->input['chat'], $this->input['message_id'], implode("\n", $text), $data);
@@ -3344,6 +4456,15 @@ PROBE;
         $telegramId = (string) ($row['telegram_id'] ?? '');
         $subId = (string) ($row['subscription_id'] ?? '');
 
+        // Не-владелец админ не может удалить сам себя: только отозвать свои
+        // конфиги. Владелец удаляет любого, включая себя.
+        if ($telegramId !== '' && (string) $telegramId === (string) ($this->input['from'] ?? '') && !$this->isUserPortalOwner()) {
+            $this->userPortalSetFlash('⚠️ ' . $this->i18n('user portal cannot delete self'));
+            $this->userPortalCard($canonicalKey);
+
+            return;
+        }
+
         // 1. Снести VLESS-клиентов владельца и его устройств из xray.json.
         if ($subId !== '') {
             $xr = $this->getXray();
@@ -3376,13 +4497,15 @@ PROBE;
             if (method_exists($this, 'deleteHwidUser')) {
                 $this->deleteHwidUser($subId);
             }
-            $pac = $this->getPacConf();
-            $ledger = $pac['user_portal_issued'] ?? [];
-            if (is_array($ledger) && isset($ledger[$subId])) {
-                unset($ledger[$subId]);
-                $pac['user_portal_issued'] = $ledger;
-                $this->setPacConf($pac);
-            }
+            $this->withPacLock(function () use ($subId): void {
+                $pac = $this->getPacConf();
+                $ledger = $pac['user_portal_issued'] ?? [];
+                if (is_array($ledger) && isset($ledger[$subId])) {
+                    unset($ledger[$subId]);
+                    $pac['user_portal_issued'] = $ledger;
+                    $this->setPacConf($pac);
+                }
+            });
         }
 
         // 4. Снять привязку из каталога (если была).
@@ -3421,6 +4544,14 @@ PROBE;
         }
         [$canonicalKey, $row] = $resolved;
         $subscriptionId = (string) ($row['subscription_id'] ?? '');
+        $tgId = (string) ($row['telegram_id'] ?? '');
+        // Новая VLESS-подписка наследует срок кабинета, а не свой дефолт:
+        // «если у VLESS было 35 дней, но подписки нет, я выдал — подгоняется
+        // под кабинет». 0 тоже применяется (снимает срок — подписка «без
+        // ограничения», как и кабинет).
+        if ($tgId !== '') {
+            $this->setUserPortalVlessTime($subscriptionId, $this->getUserPortalExpiry($tgId));
+        }
         $owner = $this->resolveSubscriptionClient($subscriptionId);
         if ($owner === null) {
             $this->userPortalSetFlash('⚠️ ' . $this->i18n('user portal sub not found'));
@@ -3455,6 +4586,7 @@ PROBE;
         }
         $issuedCount = $this->bumpUserPortalIssued($subscriptionId, 'vless');
         $this->userPortalNotifyIssue($subscriptionId, 'vless', $issuedCount);
+        $this->notifyAdminIssue($this->userPortalDisplayName($row), 'vless');
         $this->userPortalSetFlash('✅ ' . $this->i18n('user portal issue config ok'));
         $this->userPortalCard($key);
     }
@@ -3486,6 +4618,7 @@ PROBE;
             $out[] = [
                 'index' => (int) $index,
                 'name'  => $this->getName($client['interface']),
+                'time'  => (string) ($client['interface']['## time'] ?? ''),
             ];
         }
 
@@ -3529,11 +4662,32 @@ PROBE;
             $out[] = [
                 'index' => (int) $index,
                 'name'  => $this->getName($iface),
+                'time'  => (string) ($iface['## time'] ?? ''),
             ];
         }
 
         return $out;
     }
+
+    /**
+     * Сколько конфигов выдано человеку: VLESS (0/1 — есть подписка или нет) и
+     * Amnezia/WG (число WG-пиров, привязанных по telegram id). Источник правды
+     * для списка людей и карточки — вместо вводящего в заблуждение «активен».
+     */
+    protected function userPortalIssuedCounts(array $row): array
+    {
+        $subId = (string) ($row['subscription_id'] ?? '');
+        $tgId  = (string) ($row['telegram_id'] ?? '');
+        // «VLESS 1» только если подписка реально есть в xray (та же проверка,
+        // что и в меню отзыва userPortalCardRevoke). Раньше считали по непустому
+        // subscription_id — карточка показывала «VLESS 1» при битой/протухшей
+        // привязке, а отозвать было нечего.
+        $vless = ($subId !== '' && $this->resolveSubscriptionClient($subId) !== null) ? 1 : 0;
+        $wg    = $tgId !== '' ? count($this->userPortalIssuedWgClientsByTg($tgId)) : 0;
+
+        return ['vless' => $vless, 'wg' => $wg];
+    }
+
     /**
      * WG-конфиги, которыми владеет юзер в кабинете: при обычной подписке —
      * по subscription_id, при «только Амнезия» (без VLESS) — по telegram id.
@@ -3576,7 +4730,7 @@ PROBE;
             $data = [[
                 [
                     'text'          => $this->i18n('back'),
-                    'callback_data' => '/userPortalCard ' . rawurlencode($canonicalKey),
+                    'callback_data' => '/userPortalCard ' . rawurlencode($canonicalKey . '_' . $this->userPortalBackPage('users')),
                 ],
             ]];
             $this->update($this->input['chat'], $this->input['message_id'], implode("\n", $text), $data);
@@ -3620,7 +4774,7 @@ PROBE;
         }
         $data[] = [[
             'text'          => $this->i18n('back'),
-            'callback_data' => '/userPortalCard ' . rawurlencode($canonicalKey),
+            'callback_data' => '/userPortalCard ' . rawurlencode($canonicalKey . '_' . $this->userPortalBackPage('users')),
         ]];
         $this->update($this->input['chat'], $this->input['message_id'], implode("\n", $text), $data);
     }
@@ -3655,6 +4809,8 @@ PROBE;
 
         if ($telegramId !== '') {
             $this->setUserPortalBinding($telegramId, $subscriptionId);
+            // Выданная VLESS-подписка подгоняется под срок кабинета.
+            $this->setUserPortalVlessTime($subscriptionId, $this->getUserPortalExpiry($telegramId));
         }
 
         // Доставка: как в userPortalCardVless — parent-линк ретайрится в
@@ -3674,7 +4830,13 @@ PROBE;
 
         $issuedCount = $this->bumpUserPortalIssued($subscriptionId, 'vless');
         $this->userPortalNotifyIssue($subscriptionId, 'vless', $issuedCount);
+        $this->notifyAdminIssue($this->userPortalDisplayName($row), 'vless');
         $this->userPortalSetFlash('✅ ' . $this->i18n('user portal issue config ok'));
+        if ($telegramId !== '') {
+            // Перерисовать кабинет получателя сразу после выдачи: как при
+            // «Одобрить», иначе человек видит «нет активной подписки» до /update.
+            $this->renderUserPortalAs($telegramId);
+        }
         $this->userPortalCard($canonicalKey);
     }
 
@@ -3716,14 +4878,21 @@ PROBE;
 
         $data = [];
         if ($total === 0) {
-            $text[] = $this->i18n('user portal issued wg empty');
+            $text[] = $this->i18n('user portal issued wg empty add');
         } else {
             foreach ($slice as $i => $item) {
                 $number = $page * $perPage + $i + 1;
                 $name = $item['name'] !== '' ? $item['name'] : ('WG ' . $number);
-                $text[] = $number . '. <b>' . htmlspecialchars($name, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</b>';
+                $line = $number . '. <b>' . htmlspecialchars($name, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</b>';
+                if (!empty($item['time'])) {
+                    $ts = strtotime((string) $item['time']);
+                    if ($ts !== false) {
+                        $line .= ' — ' . $this->i18n('user portal expires') . ' ' . date('d.m.Y H:i', $ts);
+                    }
+                }
+                $text[] = $line;
                 $data[] = [[
-                    'text'          => $this->i18n('user portal issued wg show') . ' ' . $number,
+                    'text'          => $this->i18n('user portal issued wg show') . ' ' . $name,
                     'callback_data' => '/userPortalIssuedWgShow ' . $item['index'],
                 ]];
             }
@@ -3747,6 +4916,11 @@ PROBE;
         }
 
         $data[] = [[
+            'text'          => $this->i18n('user portal wg add self'),
+            'callback_data' => '/userPortalWgAddSelf',
+        ]];
+
+        $data[] = [[
             'text'          => $this->i18n('back'),
             'callback_data' => '/userPortal',
         ]];
@@ -3755,45 +4929,14 @@ PROBE;
     }
 
     /**
-     * Показать один выданный WG-конфиг по индексу пира в контейнере WG:
-     * текст конфига + ссылка Amnezia + QR. Индекс проверяем на принадлежность
-     * подписке — чужой конфиг по номеру не отдаём.
+     * Показать один выданный WG-конфиг по индексу пира в контейнере WG.
+     * Первый шаг — развилка «зрячий / незрячий»: файлы ещё не шлём, только
+     * меню. Индекс проверяем на принадлежность — чужой конфиг не отдаём.
      */
     public function userPortalIssuedWgShow($clientIndex)
     {
-        $session = $this->getUserPortalSession();
-        if ($session === null) {
-            $this->ackCallback($this->i18n('user portal bind first'), true);
-            $this->userPortalMenu();
-
-            return;
-        }
-
-        $ownerSubId = (string) $session['subscription_id'];
-        $clientIndex = (int) $clientIndex;
-        $conf = '';
-        $shortLink = '';
-        $name = '';
-        $peer = $this->readClients()[$clientIndex] ?? null;
-        if (is_array($peer) && is_array($peer['interface'] ?? null)) {
-            // Владелец пира: для «только Амнезия» — telegram id (owner_tg),
-            // иначе — подписка (owner_sub_id). Чужой конфиг по номеру не отдаём.
-            $owned = false;
-            if (!empty($session['wg_only'])) {
-                $owned = (string) ($peer['interface']['## owner_tg'] ?? '') === (string) ($session['telegram_id'] ?? '');
-            } else {
-                $owned = (string) ($peer['interface']['## owner_sub_id'] ?? '') === $ownerSubId;
-            }
-            if ($owned) {
-                $name = $this->getName($peer['interface']);
-                $conf = (string) $this->createConfig($peer);
-                if ($this->getWGType() === 'awg') {
-                    $shortLink = (string) $this->getAmneziaShortLink($peer);
-                }
-            }
-        }
-
-        if ($conf === '') {
+        $resolved = $this->userPortalIssuedWgResolve($clientIndex);
+        if ($resolved === null) {
             $this->ackCallback($this->i18n('user portal issued wg empty'), true);
             $this->userPortalIssuedWg();
 
@@ -3801,34 +4944,220 @@ PROBE;
         }
 
         $text = [$this->i18n('user portal issued title')];
-        if ($name !== '') {
-            $text[] = '<b>' . htmlspecialchars($name, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</b>';
+        if ($resolved['name'] !== '') {
+            $text[] = '<b>' . htmlspecialchars($resolved['name'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</b>';
         }
         $text[] = '';
-        if ($shortLink !== '') {
-            $text[] = $this->i18n('user portal wg amnezia link') . ':';
-            $text[] = '<code>' . htmlspecialchars($shortLink, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</code>';
-            $text[] = '';
+        $text[] = $this->i18n('user portal show mode title');
+
+        $this->userPortalShow(implode("\n", $text), [
+            [[
+                'text'          => $this->i18n('user portal show mode sighted'),
+                'callback_data' => '/userPortalIssuedWgShowMode ' . $resolved['index'] . ' sighted',
+            ]],
+            [[
+                'text'          => $this->i18n('user portal show mode blind'),
+                'callback_data' => '/userPortalIssuedWgShowMode ' . $resolved['index'] . ' blind',
+            ]],
+            [[
+                'text'          => $this->i18n('back'),
+                'callback_data' => '/userPortalIssuedWg',
+            ]],
+        ]);
+    }
+
+    /**
+     * Резолв выданного WG-конфига по индексу пира: принадлежность подписке
+     * или человеку (wg_only) + имя + текст .conf. null — чужой/битый индекс.
+     */
+    protected function userPortalIssuedWgResolve($clientIndex): ?array
+    {
+        $session = $this->getUserPortalSession();
+        if ($session === null) {
+            return null;
         }
-        $text[] = '<pre><code>' . htmlspecialchars($conf, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</code></pre>';
-
-        $this->userPortalShow(implode("\n", $text), [[[
-            'text'          => $this->i18n('back'),
-            'callback_data' => '/userPortalIssuedWg',
-        ]]]);
-
-        if ($shortLink !== '') {
-            $label = $name !== '' ? $name : ('WG ' . $clientIndex);
-            $this->sendQr($label, preg_replace('~^vpn://~', '', $shortLink), $label . ' — AmneziaVPN');
-            $this->sendQr($label, $conf, $label . ' — AmneziaWG');
-            $confFile = sys_get_temp_dir() . '/' . preg_replace(['~\s+~', '~\(~', '~\)~'], ['_'], $label) . '.conf';
-            file_put_contents($confFile, $conf);
-            $this->sendFile($this->input['chat'], curl_file_create($confFile), $label . ' — AmneziaWG (.conf)');
-            @unlink($confFile);
+        $ownerSubId = (string) $session['subscription_id'];
+        $clientIndex = (int) $clientIndex;
+        $peer = $this->readClients()[$clientIndex] ?? null;
+        if (!is_array($peer) || !is_array($peer['interface'] ?? null)) {
+            return null;
+        }
+        // Владелец пира: для «только Амнезия» — telegram id (owner_tg),
+        // иначе — подписка (owner_sub_id). Чужой конфиг по номеру не отдаём.
+        $owned = false;
+        if (!empty($session['wg_only'])) {
+            $owned = (string) ($peer['interface']['## owner_tg'] ?? '') === (string) ($session['telegram_id'] ?? '');
         } else {
-            $label = $name !== '' ? $name : ('WG ' . $clientIndex);
-            $this->sendQr($label, $conf, $label . ' — WireGuard');
+            $owned = (string) ($peer['interface']['## owner_sub_id'] ?? '') === $ownerSubId;
         }
+        if (!$owned) {
+            return null;
+        }
+        $name = $this->getName($peer['interface']);
+        $conf = (string) $this->createConfig($peer);
+        if ($conf === '') {
+            return null;
+        }
+
+        return [
+            'index' => $clientIndex,
+            'name'  => $name,
+            'conf'  => $conf,
+            'peer'  => $peer,
+        ];
+    }
+
+    /**
+     * Шаг 2 — выбор ОС после «зрячий / незрячий». Файлы по-прежнему не шлём.
+     */
+    public function userPortalIssuedWgShowMode($clientIndex, $mode)
+    {
+        if ($mode !== 'sighted' && $mode !== 'blind') {
+            $this->ackCallback($this->i18n('user portal issued wg empty'), true);
+
+            return;
+        }
+        $resolved = $this->userPortalIssuedWgResolve($clientIndex);
+        if ($resolved === null) {
+            $this->ackCallback($this->i18n('user portal issued wg empty'), true);
+            $this->userPortalIssuedWg();
+
+            return;
+        }
+
+        $text = [$this->i18n('user portal issued title')];
+        if ($resolved['name'] !== '') {
+            $text[] = '<b>' . htmlspecialchars($resolved['name'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</b>';
+        }
+        $text[] = '';
+        $text[] = $this->i18n('user portal show os title');
+
+        $osList = ['win', 'mac', 'linux', 'ios', 'android'];
+        $data = [];
+        foreach ($osList as $os) {
+            $data[] = [[
+                'text'          => $this->i18n('user portal show os ' . $os),
+                'callback_data' => '/userPortalIssuedWgShowOs ' . $resolved['index'] . ' ' . $mode . ' ' . $os,
+            ]];
+        }
+        $data[] = [[
+            'text'          => $this->i18n('back'),
+            'callback_data' => '/userPortalIssuedWgShow ' . $resolved['index'],
+        ]];
+
+        $this->userPortalShow(implode("\n", $text), $data);
+    }
+
+    /**
+     * Шаг 3 — выдача по ОС. Файлы здесь НЕ шлём: показываем инструкцию
+     * (без сырых ссылок) и кнопки «Скачать 1» / «Скачать 2» (зеркало, только
+     * Android) / «Получить конфиг» / «назад». Файлы уходят по кнопке
+     * «Получить конфиг» → userPortalIssuedWgGetConf().
+     */
+    public function userPortalIssuedWgShowOs($clientIndex, $mode, $os)
+    {
+        if (($mode !== 'sighted' && $mode !== 'blind') || !in_array($os, ['win', 'mac', 'linux', 'ios', 'android'], true)) {
+            $this->ackCallback($this->i18n('user portal issued wg empty'), true);
+
+            return;
+        }
+        $resolved = $this->userPortalIssuedWgResolve($clientIndex);
+        if ($resolved === null) {
+            $this->ackCallback($this->i18n('user portal issued wg empty'), true);
+            $this->userPortalIssuedWg();
+
+            return;
+        }
+
+        $isAwg = $this->getWGType() === 'awg';
+        $this->ackCallback();
+
+        $dl = $this->i18n('user portal show download');
+        $buttons = [];
+        if (!$isAwg) {
+            $buttons[] = [['text' => $dl . ' 1', 'url' => 'https://www.wireguard.com/install/']];
+        } elseif ($os === 'android') {
+            $buttons[] = [['text' => 'AmneziaWG — Play', 'url' => 'https://play.google.com/store/apps/details?id=org.amnezia.awg']];
+            $buttons[] = [['text' => 'AmneziaWG — APK', 'url' => 'https://github.com/amnezia-vpn/amneziawg-android/releases']];
+            if ($mode === 'sighted') {
+                $buttons[] = [['text' => 'AmneziaVPN — Play', 'url' => 'https://play.google.com/store/apps/details?id=org.amnezia.vpn']];
+                $buttons[] = [['text' => 'AmneziaVPN — APK', 'url' => 'https://github.com/amnezia-vpn/amnezia-client/releases']];
+            }
+        } elseif ($os === 'ios') {
+            $buttons[] = [['text' => 'AmneziaWG — App Store', 'url' => 'https://apps.apple.com/app/amneziawg/id6478942365']];
+            if ($mode === 'sighted') {
+                $buttons[] = [['text' => 'AmneziaVPN — App Store', 'url' => 'https://apps.apple.com/us/app/amneziavpn/id1600529900']];
+            }
+        } else {
+            $awgUrls = [
+                'win'   => 'https://github.com/amnezia-vpn/amneziawg-windows-client/releases/latest',
+                'mac'   => 'https://apps.apple.com/app/amneziawg/id6478942365',
+                'linux' => 'https://github.com/amnezia-vpn/amneziawg-tools/releases',
+            ];
+            $buttons[] = [['text' => $dl . ' 1', 'url' => $awgUrls[$os]]];
+        }
+        $buttons[] = [[
+            'text'          => $this->i18n('user portal show get conf'),
+            'callback_data' => '/userPortalIssuedWgGetConf ' . $resolved['index'] . ' ' . $mode . ' ' . $os,
+        ]];
+        $buttons[] = [[
+            'text'          => $this->i18n('back'),
+            'callback_data' => '/userPortalIssuedWgShowMode ' . $resolved['index'] . ' ' . $mode,
+        ]];
+
+        // Инструкция под эту ОС (в меню) + правило «не переименовывать».
+        $this->userPortalShow(
+            $this->i18n('user portal show ins ' . $mode . ' ' . $os) . "\n\n" . $this->i18n('user portal show rename rule'),
+            $buttons
+        );
+    }
+
+    /**
+     * «Получить конфиг» — по кнопке из шага 3. Шлёт файлы: .conf всегда; QR —
+     * зрячему на мобильных (AmneziaWG, плюс AmneziaVPN под Android — приложение
+     * там есть). На десктопе и незрячему — только .conf.
+     */
+    public function userPortalIssuedWgGetConf($clientIndex, $mode, $os)
+    {
+        if (($mode !== 'sighted' && $mode !== 'blind') || !in_array($os, ['win', 'mac', 'linux', 'ios', 'android'], true)) {
+            $this->ackCallback($this->i18n('user portal issued wg empty'), true);
+
+            return;
+        }
+        $resolved = $this->userPortalIssuedWgResolve($clientIndex);
+        if ($resolved === null) {
+            $this->ackCallback($this->i18n('user portal issued wg empty'), true);
+            $this->userPortalIssuedWg();
+
+            return;
+        }
+
+        $label = $resolved['name'] !== '' ? $resolved['name'] : ('WG ' . $resolved['index']);
+        $conf = $resolved['conf'];
+        $isAwg = $this->getWGType() === 'awg';
+        $clientName = $isAwg ? 'AmneziaWG' : 'WireGuard';
+        $isMobile = in_array($os, ['ios', 'android'], true);
+        $isSighted = $mode === 'sighted';
+
+        $this->ackCallback();
+
+        // QR — зрячему на мобильных: там его сканируют в приложении.
+        if ($isSighted && $isMobile) {
+            $this->sendQr($label, $conf, $label . ' — ' . $clientName);
+            // AmneziaVPN — полный клиент; шлём и его ключ (vpn://) на мобильных.
+            if ($isAwg && ($os === 'android' || $os === 'ios')) {
+                $short = (string) $this->getAmneziaShortLink($resolved['peer']);
+                if ($short !== '') {
+                    $this->sendQr($label, preg_replace('~^vpn://~', '', $short), $label . ' — AmneziaVPN');
+                }
+            }
+        }
+
+        // .conf — всегда.
+        $confFile = sys_get_temp_dir() . '/' . preg_replace(['~\s+~', '~\(~', '~\)~'], ['_'], $label) . '.conf';
+        file_put_contents($confFile, $conf);
+        $this->sendFile($this->input['chat'], curl_file_create($confFile), $label . ' — ' . $clientName . ' (.conf)');
+        @unlink($confFile);
     }
 
     /**
@@ -3837,7 +5166,7 @@ PROBE;
      * новый конфиг. Никакой привязки к VLESS-устройствам нет — амнезия живёт
      * сама по себе, метка владельца ## owner_sub_id = subscription_id.
      */
-    public function userPortalCardWg(string $key, int $page = 0)
+    public function userPortalCardWg(string $key, int $page = -1)
     {
         if (!$this->admin) {
             return;
@@ -3851,6 +5180,7 @@ PROBE;
             return;
         }
         [$canonicalKey, $row] = $resolved;
+        $telegramId = (string) ($row['telegram_id'] ?? '');
         $subscriptionId = (string) ($row['subscription_id'] ?? '');
         $ownerSubId = '';
         if ($subscriptionId !== '') {
@@ -3865,14 +5195,26 @@ PROBE;
         $total = count($peers);
         $perPage = max(1, $this->limit ?: 5);
         $pages = max(1, (int) ceil($total / $perPage));
+        // Возврат из выдачи/добавления пира (userPortalWgIssue / WgAddCommit)
+        // зовёт userPortalCardWg($key) без page — восстанавливаем последнюю
+        // страницу списка пиров, а не сбрасываем на первую.
+        if ($page < 0) {
+            $page = $this->userPortalBackPage('wg');
+        }
         $page = max(0, min($page, $pages - 1));
+        $this->userPortalSetBackPage(['wg' => $page]);
         $slice = array_slice($peers, $page * $perPage, $perPage, true);
+
+        // Мультивыбор: индексы, отмеченные админом на этой карточке.
+        $select = $_SESSION['userPortalWgSelect'][(string) $canonicalKey] ?? [];
+        $selectedCount = count($select);
 
         $text = [$this->i18n('user portal wg pick title') . ':'];
         $flash = $this->userPortalTakeFlash();
         if ($flash !== '') {
             $text[] = $flash;
         }
+        $text[] = $this->i18n('user portal wg select hint');
         $text[] = '';
 
         $data = [];
@@ -3886,12 +5228,23 @@ PROBE;
                 $iface = $client['interface'];
                 $name = $this->getName($iface);
                 $label = $name !== '' ? $name : ('WG ' . $index);
-                $already = (string) ($iface['## owner_sub_id'] ?? '') === $ownerSubId;
-                $rowButtons = [[
-                    'text'          => $this->i18n('user portal wg pick issue') . ' · ' . $label . ($already ? ' ✓' : ''),
-                    'callback_data' => '/userPortalWgIssue ' . $index . ' ' . rawurlencode($canonicalKey) . '_' . $page,
+                // Владелец — сам человек (## owner_tg, первично) либо его подписка.
+                $already = (string) ($iface['## owner_tg'] ?? '') === $telegramId
+                    || ($ownerSubId !== '' && (string) ($iface['## owner_sub_id'] ?? '') === $ownerSubId);
+                $selected = isset($select[(int) $index]);
+                // Срок жизни конфига — показываем в списке выдачи, чтобы было
+                // видно, что он не безлимитный, и что он наследует срок кабинета.
+                $expiry = '';
+                if (!empty($iface['## time'])) {
+                    $ts = strtotime((string) $iface['## time']);
+                    if ($ts !== false) {
+                        $expiry = ' · ' . $this->i18n('user portal expires') . ' ' . date('d.m.Y', $ts);
+                    }
+                }
+                $data[] = [[
+                    'text'          => ($already || $selected ? '✓ ' : '') . $label . $expiry . ($already ? ' · ' . $this->i18n('user portal wg pick bound') : ''),
+                    'callback_data' => '/userPortalWgToggle ' . $index . ' ' . rawurlencode($canonicalKey) . '_' . $page,
                 ]];
-                $data[] = $rowButtons;
             }
         }
 
@@ -3914,16 +5267,65 @@ PROBE;
             }
         }
 
+        if ($selectedCount > 0) {
+            $data[] = [[
+                'text'          => $this->i18n('user portal wg send') . ' (' . $selectedCount . ')',
+                'callback_data' => '/userPortalWgSend ' . rawurlencode($canonicalKey) . '_' . $page,
+            ]];
+        }
         $data[] = [[
             'text'          => $this->i18n('user portal wg pick add'),
             'callback_data' => '/userPortalWgAdd ' . rawurlencode($canonicalKey),
         ]];
         $data[] = [[
             'text'          => $this->i18n('back'),
-            'callback_data' => '/userPortalCard ' . rawurlencode($canonicalKey),
+            'callback_data' => '/userPortalCard ' . rawurlencode($canonicalKey . '_' . $this->userPortalBackPage('users')),
         ]];
 
         $this->userPortalShow(implode("\n", $text), $data ?: false);
+    }
+
+    /**
+     * Выдать один WG-пир человеку: привязать (## owner_tg / ## owner_sub_id) и
+     * сохранить. Конфиг сюда не доставляем — после выдачи человеку идёт одно
+     * сводное уведомление, а конфиги он открывает из кабинета кнопкой
+     * «Показать». Леждер и уведомление считает вызывающий. Возвращает подпись
+     * выданного конфига или null, если пира нет.
+     */
+    private function issueWgPeerToUser(array &$clients, int $index, string $telegramId, string $subscriptionId): ?string
+    {
+        if (!isset($clients[$index]) || !is_array($clients[$index]['interface'] ?? null)) {
+            return null;
+        }
+        // Амнезия/WG живёт независимо от VLESS-подписки: владелец пира — сам
+        // человек (telegram id), а не подписка. ## owner_tg — первичный ключ
+        // владения WG-конфигом; ## owner_sub_id оставляем только как «на этой
+        // подписке тоже выдан» (совместимость с grant-меню, которое резолвит
+        // владельца по подписке).
+        $clients[$index]['interface']['## owner_tg'] = $telegramId;
+        if ($subscriptionId !== '') {
+            $clients[$index]['interface']['## owner_sub_id'] = $subscriptionId;
+            // Привязать заявителя к кабинету: VLESS-выдача делает это в
+            // userPortalCardSubIssue, а WG/Amnezia-выдача — нет, из-за чего
+            // кабинет после выдачи Амнезии всё равно писал «нет подписки».
+            $this->setUserPortalBinding($telegramId, $subscriptionId);
+        }
+        $this->saveClients($clients);
+
+        // Единая сущность «времени»: если у кабинета задан срок, свежевыданный
+        // Amnezia/WG-конфиг наследует его сразу (независимо от порядка выдачи —
+        // VLESS до Амнезии или наоборот). Без срока конфиг остаётся безлимитным.
+        $expiresAt = $this->getUserPortalExpiry($telegramId);
+        if ($expiresAt > 0) {
+            $this->setUserPortalWgTime($telegramId, $expiresAt);
+        }
+
+        // Конфиг + QR не шлём: после выдачи человеку идёт одно сводное
+        // уведомление «Вам выдано N конфигов», а сам набор он открывает из
+        // кабинета кнопкой «Показать».
+        $peer = $clients[$index];
+        $name = $this->getName($peer['interface']);
+        return $name !== '' ? $name : ('WG ' . $index);
     }
 
     /**
@@ -3955,88 +5357,334 @@ PROBE;
         $subscriptionId = (string) ($row['subscription_id'] ?? '');
 
         $clients = $this->readClients();
-        if (!isset($clients[$index]) || !is_array($clients[$index]['interface'] ?? null)) {
+        if ($this->issueWgPeerToUser($clients, $index, $telegramId, $subscriptionId) === null) {
             $this->userPortalSetFlash('⚠️ ' . $this->i18n('user portal wg pick empty'));
             $this->userPortalCardWg($canonicalKey, $page);
 
             return;
         }
-        // Амнезия/WG живёт независимо от VLESS-подписки: владелец пира — сам
-        // человек (telegram id), а не подписка. ## owner_tg — первичный ключ
-        // владения WG-конфигом; ## owner_sub_id оставляем только как «на этой
-        // подписке тоже выдан» (совместимость с grant-меню, которое резолвит
-        // владельца по подписке).
-        $clients[$index]['interface']['## owner_tg'] = $telegramId;
-        if ($subscriptionId !== '') {
-            $clients[$index]['interface']['## owner_sub_id'] = $subscriptionId;
-            // Привязать заявителя к кабинету: VLESS-выдача делает это в
-            // userPortalCardSubIssue, а WG/Amnezia-выдача — нет, из-за чего
-            // кабинет после выдачи Амнезии всё равно писал «нет подписки».
-            $this->setUserPortalBinding($telegramId, $subscriptionId);
-        }
-        $this->saveClients($clients);
-
-        $peer = $clients[$index];
-        $name = $this->getName($peer['interface']);
-        $shortLink = $this->getWGType() === 'awg' ? (string) $this->getAmneziaShortLink($peer) : '';
-        if ($shortLink !== '') {
-            $this->deliverPortalConfigToChat($telegramId, preg_replace('~^vpn://~', '', $shortLink), 'wg', $name !== '' ? $name : ('WG ' . $index));
-        } else {
-            $this->deliverPortalConfigTextToChat($telegramId, (string) $this->createConfig($peer), $name !== '' ? $name : ('WG ' . $index));
-        }
 
         if ($subscriptionId !== '') {
-            $issuedCount = $this->bumpUserPortalIssued($subscriptionId, 'wg');
-            $this->userPortalNotifyIssue($subscriptionId, 'wg', $issuedCount);
+            $this->bumpUserPortalIssued($subscriptionId, 'wg');
         }
+        // Одно сводное уведомление получателю вместо набора конфигов: человек
+        // нажимает «Обновить» в кабинете и открывает конфиги кнопкой «Показать».
+        $this->userPortalNotifyIssueToChat($telegramId, 'wg', 1);
+        $this->notifyAdminIssue($this->userPortalWriteTargetName($telegramId), 'wg');
         $this->userPortalSetFlash('✅ ' . $this->i18n('user portal issue config ok'));
         $this->userPortalCardWg($canonicalKey, $page);
     }
 
     /**
-     * «Отозвать конфиг» — физически удалить WG-пир из clients1.json и
-     * перезапустить WG (как deletePeer), затем уведомить владельца и вернуться
-     * к карточке выдачи.
+     * Отметить/снять конфиг на странице мультивыбора. Уже выданные пропускаем.
      */
-    public function userPortalWgRevoke(int $index, string $key)
+    public function userPortalWgToggle(int $index, string $key)
+    {
+        if (!$this->admin) {
+            return;
+        }
+        $key = rawurldecode($key);
+        $page = 0;
+        if (preg_match('~^(.*)_(\d+)$~', $key, $m)) {
+            $key  = $m[1];
+            $page = (int) $m[2];
+        }
+        $resolved = $this->resolveUserPortalCardRow($key);
+        if ($resolved === null || (string) ($resolved[1]['telegram_id'] ?? '') === '') {
+            $this->userPortalSetFlash('⚠️ ' . $this->i18n('user portal bind first'));
+            $this->userPortalUsers();
+
+            return;
+        }
+        [$canonicalKey, $row] = $resolved;
+        $telegramId = (string) ($row['telegram_id'] ?? '');
+        $subscriptionId = (string) ($row['subscription_id'] ?? '');
+        $ownerSubId = '';
+        if ($subscriptionId !== '') {
+            $owner = $this->resolveSubscriptionClient($subscriptionId);
+            if ($owner !== null) {
+                $ownerSubId = $owner['subscription_id'];
+            }
+        }
+
+        $clients = $this->readClients();
+        if (!isset($clients[$index]) || !is_array($clients[$index]['interface'] ?? null)) {
+            $this->userPortalCardWg($canonicalKey, $page);
+
+            return;
+        }
+        $iface = $clients[$index]['interface'];
+        $already = (string) ($iface['## owner_tg'] ?? '') === $telegramId
+            || ($ownerSubId !== '' && (string) ($iface['## owner_sub_id'] ?? '') === $ownerSubId);
+        if ($already) {
+            $this->userPortalCardWg($canonicalKey, $page);
+
+            return;
+        }
+
+        $sel = $_SESSION['userPortalWgSelect'][(string) $canonicalKey] ?? [];
+        if (isset($sel[(int) $index])) {
+            unset($sel[(int) $index]);
+        } else {
+            $sel[(int) $index] = true;
+        }
+        $_SESSION['userPortalWgSelect'][(string) $canonicalKey] = $sel;
+
+        $this->userPortalCardWg($canonicalKey, $page);
+    }
+
+    /**
+     * Отправить все отмеченные конфиги выбранному человеку, остаться на той же
+     * странице. Леждер начисляем один раз на всю пачку, уведомляем один раз.
+     */
+    public function userPortalWgSend(string $key)
+    {
+        if (!$this->admin) {
+            return;
+        }
+        $key = rawurldecode($key);
+        $page = 0;
+        if (preg_match('~^(.*)_(\d+)$~', $key, $m)) {
+            $key  = $m[1];
+            $page = (int) $m[2];
+        }
+        $resolved = $this->resolveUserPortalCardRow($key);
+        if ($resolved === null || (string) ($resolved[1]['telegram_id'] ?? '') === '') {
+            $this->userPortalSetFlash('⚠️ ' . $this->i18n('user portal bind first'));
+            $this->userPortalUsers();
+
+            return;
+        }
+        [$canonicalKey, $row] = $resolved;
+        $telegramId = (string) ($row['telegram_id'] ?? '');
+        $subscriptionId = (string) ($row['subscription_id'] ?? '');
+
+        $sel = $_SESSION['userPortalWgSelect'][(string) $canonicalKey] ?? [];
+        $clients = $this->readClients();
+        $sent = 0;
+        foreach (array_keys($sel) as $index) {
+            if ($this->issueWgPeerToUser($clients, (int) $index, $telegramId, $subscriptionId) !== null) {
+                $sent++;
+            }
+        }
+        $_SESSION['userPortalWgSelect'][(string) $canonicalKey] = [];
+
+        if ($sent > 0 && $subscriptionId !== '') {
+            $this->bumpUserPortalIssued($subscriptionId, 'wg', $sent);
+        }
+        if ($sent > 0) {
+            // Одно сводное уведомление получателю вместо набора конфигов.
+            $this->userPortalNotifyIssueToChat($telegramId, 'wg', $sent);
+            $this->notifyAdminIssue($this->userPortalWriteTargetName($telegramId), 'wg', $sent);
+        }
+        $this->userPortalSetFlash('✅ ' . $this->i18n('user portal issue config ok') . ' · ' . $sent);
+        $this->userPortalCardWg($canonicalKey, $page);
+    }
+
+    /**
+     * «Отозвать Amnezia/WG» — выбор выданных этому человеку конфигов
+     * мультивыбором (по принципу выдачи: userPortalCardWg), затем отзыв пачкой.
+     */
+    public function userPortalWgRevokePick(string $key, int $page = -1)
     {
         if (!$this->admin) {
             return;
         }
         $key = rawurldecode($key);
         $resolved = $this->resolveUserPortalCardRow($key);
-        if ($resolved === null) {
+        if ($resolved === null || (string) ($resolved[1]['telegram_id'] ?? '') === '') {
+            $this->userPortalSetFlash('⚠️ ' . $this->i18n('user portal bind first'));
             $this->userPortalUsers();
 
             return;
         }
         [$canonicalKey, $row] = $resolved;
-        $clients = $this->readClients();
-        if (!isset($clients[$index]) || !is_array($clients[$index]['interface'] ?? null)) {
-            $this->userPortalSetFlash('⚠️ ' . $this->i18n('user portal wg pick empty'));
-            $this->userPortalCardWg($canonicalKey);
+        $telegramId = (string) ($row['telegram_id'] ?? '');
+
+        // Только выданные этому человеку конфиги, в порядке clients1.json.
+        $issued = $this->userPortalIssuedWgClientsByTg($telegramId);
+        $total = count($issued);
+        $perPage = max(1, $this->limit ?: 5);
+        $pages = max(1, (int) ceil($total / $perPage));
+        if ($page < 0) {
+            $page = $this->userPortalBackPage('wgrevoke');
+        }
+        $page = max(0, min($page, $pages - 1));
+        $this->userPortalSetBackPage(['wgrevoke' => $page]);
+        $slice = array_slice($issued, $page * $perPage, $perPage, true);
+
+        $select = $_SESSION['userPortalWgRevokeSelect'][(string) $canonicalKey] ?? [];
+        $selectedCount = count($select);
+
+        $text = [$this->i18n('user portal wg revoke pick title') . ':'];
+        $flash = $this->userPortalTakeFlash();
+        if ($flash !== '') {
+            $text[] = $flash;
+        }
+        $text[] = $this->i18n('user portal wg revoke select hint');
+        $text[] = '';
+
+        $data = [];
+        if ($total === 0) {
+            $text[] = $this->i18n('user portal wg revoke empty');
+        } else {
+            foreach ($slice as $item) {
+                $index = (int) $item['index'];
+                $name  = $item['name'];
+                $label = $name !== '' ? $name : ('WG ' . $index);
+                $selected = isset($select[$index]);
+                $data[] = [[
+                    'text'          => ($selected ? '✓ ' : '') . $label,
+                    'callback_data' => '/userPortalWgRevokeToggle ' . $index . ' ' . rawurlencode($canonicalKey) . '_' . $page,
+                ]];
+            }
+        }
+
+        if ($pages > 1) {
+            $nav = [];
+            if ($page > 0) {
+                $nav[] = [
+                    'text'          => '←',
+                    'callback_data' => '/userPortalWgRevokePick ' . rawurlencode($canonicalKey) . '_' . ($page - 1),
+                ];
+            }
+            if ($page < $pages - 1) {
+                $nav[] = [
+                    'text'          => '→',
+                    'callback_data' => '/userPortalWgRevokePick ' . rawurlencode($canonicalKey) . '_' . ($page + 1),
+                ];
+            }
+            if (!empty($nav)) {
+                $data[] = $nav;
+            }
+        }
+
+        if ($selectedCount > 0) {
+            $data[] = [[
+                'text'          => $this->i18n('user portal wg revoke send') . ' (' . $selectedCount . ')',
+                'callback_data' => '/userPortalWgRevokeSend ' . rawurlencode($canonicalKey) . '_' . $page,
+            ]];
+        }
+        $data[] = [[
+            'text'          => $this->i18n('back'),
+            'callback_data' => '/userPortalCardRevoke ' . rawurlencode($canonicalKey),
+        ]];
+
+        $this->userPortalShow(implode("\n", $text), $data ?: false);
+    }
+
+    /**
+     * Отметить/снять выданный конфиг на странице мультивыбора отзыва.
+     */
+    public function userPortalWgRevokeToggle(int $index, string $key)
+    {
+        if (!$this->admin) {
+            return;
+        }
+        $key = rawurldecode($key);
+        $page = 0;
+        if (preg_match('~^(.*)_(\d+)$~', $key, $m)) {
+            $key  = $m[1];
+            $page = (int) $m[2];
+        }
+        $resolved = $this->resolveUserPortalCardRow($key);
+        if ($resolved === null || (string) ($resolved[1]['telegram_id'] ?? '') === '') {
+            $this->userPortalSetFlash('⚠️ ' . $this->i18n('user portal bind first'));
+            $this->userPortalUsers();
 
             return;
         }
-        $name = $this->getName($clients[$index]['interface']);
-        $conf = $this->readConfig();
-        $this->deleteClient($index);
-        if (isset($conf['peers'][$index])) {
-            unset($conf['peers'][$index]);
-            $this->restartWG($this->createConfig($conf));
+        [$canonicalKey] = $resolved;
+
+        $sel = $_SESSION['userPortalWgRevokeSelect'][(string) $canonicalKey] ?? [];
+        if (isset($sel[$index])) {
+            unset($sel[$index]);
+        } else {
+            $sel[$index] = true;
+        }
+        $_SESSION['userPortalWgRevokeSelect'][(string) $canonicalKey] = $sel;
+
+        $this->userPortalWgRevokePick($canonicalKey, $page);
+    }
+
+    /**
+     * Отозвать все отмеченные конфиги пачкой: удалить пиры из clients1.json и
+     * из wg-конфига за один проход, перезапустить WG один раз, уведомить
+     * владельца одним сообщением.
+     */
+    public function userPortalWgRevokeSend(string $key)
+    {
+        if (!$this->admin) {
+            return;
+        }
+        $key = rawurldecode($key);
+        $page = 0;
+        if (preg_match('~^(.*)_(\d+)$~', $key, $m)) {
+            $key  = $m[1];
+            $page = (int) $m[2];
+        }
+        $resolved = $this->resolveUserPortalCardRow($key);
+        if ($resolved === null || (string) ($resolved[1]['telegram_id'] ?? '') === '') {
+            $this->userPortalSetFlash('⚠️ ' . $this->i18n('user portal bind first'));
+            $this->userPortalUsers();
+
+            return;
+        }
+        [$canonicalKey, $row] = $resolved;
+        $telegramId = (string) ($row['telegram_id'] ?? '');
+
+        $sel = $_SESSION['userPortalWgRevokeSelect'][(string) $canonicalKey] ?? [];
+        if (empty($sel)) {
+            $this->userPortalWgRevokePick($canonicalKey, $page);
+
+            return;
         }
 
-        $telegramId = (string) ($row['telegram_id'] ?? '');
+        $clients = $this->readClients();
+        $conf    = $this->readConfig();
+        $toRemove = [];
+        $labels   = [];
+        foreach (array_keys($sel) as $idx) {
+            $idx = (int) $idx;
+            if (!isset($clients[$idx]) || !is_array($clients[$idx]['interface'] ?? null)) {
+                continue;
+            }
+            $name = $this->getName($clients[$idx]['interface']);
+            $labels[] = $name !== '' ? $name : ('WG ' . $idx);
+            $toRemove[] = $idx;
+        }
+        if (empty($toRemove)) {
+            $_SESSION['userPortalWgRevokeSelect'][(string) $canonicalKey] = [];
+            $this->userPortalSetFlash('⚠️ ' . $this->i18n('user portal wg revoke empty'));
+            $this->userPortalWgRevokePick($canonicalKey, $page);
+
+            return;
+        }
+
+        // Удалить пиры из wg-конфига и перезапустить WG один раз.
+        foreach ($toRemove as $idx) {
+            if (isset($conf['peers'][$idx])) {
+                unset($conf['peers'][$idx]);
+            }
+        }
+        // Удалить клиентов из clients1.json и переиндексировать один раз.
+        foreach ($toRemove as $idx) {
+            unset($clients[$idx]);
+        }
+        $this->saveClients(array_values($clients));
+        $this->restartWG($this->createConfig($conf));
+
+        $_SESSION['userPortalWgRevokeSelect'][(string) $canonicalKey] = [];
+
         if ($telegramId !== '') {
-            $label = $name !== '' ? $name : ('WG ' . $index);
             $this->send(
                 $telegramId,
-                $this->i18n('user portal revoked wg msg') . ' ' . $label,
+                $this->i18n('user portal revoked wg msg') . ' ' . implode(', ', $labels),
             );
         }
 
-        $this->userPortalSetFlash('✅ ' . $this->i18n('user portal revoke ok'));
-        $this->userPortalCardWg($canonicalKey);
+        $this->userPortalSetFlash('✅ ' . $this->i18n('user portal revoke ok') . ' · ' . count($labels));
+        $this->userPortalWgRevokePick($canonicalKey, $page);
     }
 
     /**
@@ -4121,6 +5769,272 @@ PROBE;
     }
 
     /**
+     * Самообслуживание: юзер жмёт «Добавить конфиг» в кабинете и вводит имя —
+     * конфиг (полный тоннель) сразу его. Лимит — сумма выданных админом + своих,
+     * срезается в getUserPortalWgLimit. Это НЕ админ-флоу userPortalWgAdd (тот
+     * с выбором маршрутизации и мультивыбором на выдачу).
+     */
+    public function userPortalWgAddSelf()
+    {
+        $session = $this->getUserPortalSession();
+        if ($session === null) {
+            $this->ackCallback($this->i18n('user portal bind first'), true);
+            $this->userPortalMenu();
+
+            return;
+        }
+        $tgId = (string) ($session['telegram_id'] ?? '');
+        $limit = $this->getUserPortalWgLimit($tgId);
+        $total = count($this->userPortalIssuedWgClientsByTg($tgId));
+        if ($total >= $limit) {
+            $this->ackCallback(sprintf($this->i18n('user portal wg add self limit reached'), $total, $limit), true);
+
+            return;
+        }
+        $this->userPortalPromptInput(
+            $this->i18n('user portal wg add self name prompt'),
+            'userPortalWgAddSelfName',
+            [],
+        );
+    }
+
+    /**
+     * Ввод имени своего конфига (диспетчер текстового ввода, не-админ).
+     */
+    public function userPortalWgAddSelfName($text)
+    {
+        $session = $this->getUserPortalSession();
+        if ($session === null) {
+            return;
+        }
+        $tgId = (string) ($session['telegram_id'] ?? '');
+        $subscriptionId = (string) ($session['subscription_id'] ?? '');
+        $name = trim((string) $text);
+
+        $limit = $this->getUserPortalWgLimit($tgId);
+        $before = count($this->userPortalIssuedWgClientsByTg($tgId));
+        if ($before >= $limit) {
+            $this->userPortalSetFlash('⚠️ ' . sprintf($this->i18n('user portal wg add self limit reached'), $before, $limit));
+            $this->userPortalMenu();
+
+            return;
+        }
+
+        $ownerSubId = $subscriptionId !== '' ? $subscriptionId : ('tg-' . $tgId);
+        $created = $this->runInRuntimeWgContext(fn () => $this->issueNewWgProfile($ownerSubId, $name, true));
+        if ($created === null) {
+            $this->userPortalSetFlash('⚠️ ' . $this->i18n('user portal wg empty'));
+            $this->userPortalMenu();
+
+            return;
+        }
+
+        // Новый конфиг дописан последним в clients1.json — привязываем его к
+        // владельцу и сохраняем. issueWgPeerToUser уже зовёт saveClients.
+        $clients = $this->readClients();
+        $newIndex = count($clients) - 1;
+        if ($this->issueWgPeerToUser($clients, $newIndex, $tgId, $subscriptionId) === null) {
+            $this->userPortalSetFlash('⚠️ ' . $this->i18n('user portal wg empty'));
+            $this->userPortalMenu();
+
+            return;
+        }
+
+        if ($subscriptionId !== '') {
+            $this->bumpUserPortalIssued($subscriptionId, 'wg');
+        }
+        $total = count($this->userPortalIssuedWgClientsByTg($tgId));
+        $left  = max(0, $limit - $total);
+        $this->notifyAdminSelfAdd($this->userPortalWriteTargetName($tgId), $name, $total, $left);
+        $this->userPortalSetFlash('✅ ' . sprintf($this->i18n('user portal wg add self done'), $name));
+        $this->userPortalMenu();
+    }
+
+    /**
+     * Пуш остальным админам «юзер сам добавил себе конфиг». Формат-шаблон в
+     * i18n: «Имя: себе добавлен конфиг "имя" — всего N, осталось M».
+     */
+    protected function notifyAdminSelfAdd(string $who, string $name, int $total, int $left): void
+    {
+        $configFile = dirname(__DIR__) . '/config.php';
+        if (!is_file($configFile)) {
+            return;
+        }
+        $c = [];
+        require $configFile;
+        $admins = isset($c['admin']) && is_array($c['admin']) ? $c['admin'] : [];
+        $silent = isset($c['admin_silent']) && is_array($c['admin_silent']) ? $c['admin_silent'] : [];
+        if ($silent !== []) {
+            $silentMap = array_map('strval', $silent);
+            $admins = array_values(array_filter($admins, static function ($id) use ($silentMap) {
+                return !in_array((string) $id, $silentMap, true);
+            }));
+        }
+        if ($admins === []) {
+            return;
+        }
+        $actingId = (string) ($this->input['from'] ?? '');
+        $text = '🔔 ' . sprintf($this->i18n('user portal wg add self admin notify'), $who, $name, $total, $left);
+        foreach ($admins as $adminId) {
+            $adminId = (string) $adminId;
+            if ($adminId === '' || $adminId === $actingId) {
+                continue;
+            }
+            try {
+                $this->send($adminId, $text);
+            } catch (\Throwable $e) {
+                // Неудачная рассылка одному админу не должна ломать портал.
+            }
+        }
+    }
+
+    /**
+     * Кнопка «Лимит Amnezia» в карточке пользователя: админ задаёт per-user
+     * лимит конфигов Amnezia/WG. 0 = «как у всех» (глобальный дефолт).
+     */
+    public function userPortalWgLimit(string $key)
+    {
+        if (!$this->admin) {
+            return;
+        }
+        $key = rawurldecode($key);
+        $resolved = $this->resolveUserPortalCardRow($key);
+        if ($resolved === null || (string) ($resolved[1]['telegram_id'] ?? '') === '') {
+            $this->userPortalSetFlash('⚠️ ' . $this->i18n('user portal bind first'));
+            $this->userPortalUsers();
+
+            return;
+        }
+        [$canonicalKey, $row] = $resolved;
+        $tgId = (string) ($row['telegram_id'] ?? '');
+        $current = $this->getUserPortalWgLimit($tgId);
+        $this->userPortalPromptInput(
+            $this->i18n('user portal wg limit prompt') . "\n" . $this->i18n('user portal wg limit') . ': ' . $current,
+            'userPortalWgLimitSave',
+            [rawurlencode($canonicalKey)],
+        );
+    }
+
+    /**
+     * Сохранение per-user лимита (диспетчер текстового ввода, админ).
+     */
+    public function userPortalWgLimitSave($text, string $key)
+    {
+        if (!$this->admin) {
+            return;
+        }
+        $key = rawurldecode($key);
+        $resolved = $this->resolveUserPortalCardRow($key);
+        if ($resolved === null || (string) ($resolved[1]['telegram_id'] ?? '') === '') {
+            $this->userPortalSetFlash('⚠️ ' . $this->i18n('user portal bind first'));
+            $this->userPortalUsers();
+
+            return;
+        }
+        [$canonicalKey, $row] = $resolved;
+        $tgId = (string) ($row['telegram_id'] ?? '');
+        $limit = (int) trim((string) $text);
+        if ($limit < 0) {
+            $limit = 0;
+        }
+        $this->setUserPortalWgLimit($tgId, $limit);
+        $this->userPortalSetFlash('✅ ' . $this->i18n('user portal wg limit') . ': ' . $this->getUserPortalWgLimit($tgId));
+        $this->userPortalCard($canonicalKey);
+    }
+
+    /**
+     * Кнопка «Время» в карточке пользователя: админ задаёт срок жизни кабинета.
+     * Единый срок пишется параллельно в X-Ray (VLESS) и все Amnezia/WG-конфиги.
+     */
+    public function userPortalExpiry(string $key)
+    {
+        if (!$this->admin) {
+            return;
+        }
+        $key = rawurldecode($key);
+        $resolved = $this->resolveUserPortalCardRow($key);
+        if ($resolved === null || (string) ($resolved[1]['telegram_id'] ?? '') === '') {
+            $this->userPortalSetFlash('⚠️ ' . $this->i18n('user portal bind first'));
+            $this->userPortalUsers();
+
+            return;
+        }
+        [$canonicalKey, $row] = $resolved;
+        $tgId = (string) ($row['telegram_id'] ?? '');
+        $current = $this->getUserPortalExpiry($tgId);
+        $this->userPortalPromptInput(
+            $this->i18n('user portal expiry prompt') . "\n" . $this->i18n('user portal expires') . ': ' . $this->userPortalExpiryText($current),
+            'userPortalExpirySave',
+            [rawurlencode($canonicalKey)],
+        );
+    }
+
+    /**
+     * Сохранение срока кабинета (диспетчер текстового ввода, админ).
+     */
+    public function userPortalExpirySave($text, string $key)
+    {
+        if (!$this->admin) {
+            return;
+        }
+        $key = rawurldecode($key);
+        $resolved = $this->resolveUserPortalCardRow($key);
+        if ($resolved === null || (string) ($resolved[1]['telegram_id'] ?? '') === '') {
+            $this->userPortalSetFlash('⚠️ ' . $this->i18n('user portal bind first'));
+            $this->userPortalUsers();
+
+            return;
+        }
+        [$canonicalKey, $row] = $resolved;
+        $tgId = (string) ($row['telegram_id'] ?? '');
+        $parsed = $this->parseUserPortalExpiry((string) $text);
+        if ($parsed === null) {
+            $this->userPortalSetFlash('⚠️ ' . $this->i18n('user portal expiry bad format'));
+            $this->userPortalExpiry($canonicalKey);
+
+            return;
+        }
+        $this->setUserPortalExpiry($tgId, $parsed);
+        $this->notifyUserPortalExpirySet($tgId, $parsed);
+        $this->userPortalSetFlash('✅ ' . $this->i18n('user portal expires') . ': ' . $this->userPortalExpiryText($this->getUserPortalExpiry($tgId)));
+        $this->userPortalCard($canonicalKey);
+    }
+
+    /**
+     * Глобальный (общий) лимит WG-конфигов из настроек админа. Промпт числа.
+     */
+    public function userPortalWgGlobalLimit()
+    {
+        if (!$this->admin) {
+            return;
+        }
+        $current = $this->getUserPortalWgLimit('');
+        $this->userPortalPromptInput(
+            $this->i18n('user portal wg limit global prompt') . "\n" . $this->i18n('user portal wg limit global') . ': ' . $current,
+            'userPortalWgGlobalLimitSave',
+            [],
+        );
+    }
+
+    /**
+     * Сохранение глобального лимита в pac.json (диспетчер текстового ввода, админ).
+     */
+    public function userPortalWgGlobalLimitSave($text)
+    {
+        if (!$this->admin) {
+            return;
+        }
+        $limit = (int) trim((string) $text);
+        if ($limit < 0) {
+            $limit = 0;
+        }
+        $pac = $this->getPacConf();
+        $pac['user_portal_wg_limit'] = $limit;
+        $this->setPacConf($pac);
+        $this->menu('config');
+    }
+
+    /**
      * Финальный шаг: создать WG-пир с выбранным именем и режимом, выдать и
      * вернуться к карточке выдачи.
      */
@@ -4139,7 +6053,7 @@ PROBE;
         $subscriptionId = (string) ($row['subscription_id'] ?? '');
         $ownerSubId = $subscriptionId !== '' ? $subscriptionId : ('tg-' . $telegramId);
 
-        $created = $this->runInRuntimeWgContext(fn () => $this->issueNewWgProfile($ownerSubId, $name, $fullTunnel, $telegramId));
+        $created = $this->runInRuntimeWgContext(fn () => $this->issueNewWgProfile($ownerSubId, $name, $fullTunnel));
         if ($created === null) {
             $this->userPortalSetFlash('⚠️ ' . $this->i18n('user portal wg empty'));
             $this->userPortalCardWg($canonicalKey);
@@ -4147,27 +6061,19 @@ PROBE;
             return;
         }
 
-        $resolvedName = $this->getName($created['interface'] ?? []);
-        $shortLink = $this->getWGType() === 'awg' ? (string) $this->getAmneziaShortLink($created) : '';
-        if ($shortLink !== '') {
-            $this->deliverPortalConfigToChat($telegramId, preg_replace('~^vpn://~', '', $shortLink), 'wg', $resolvedName, (string) $this->createConfig($created));
-        } else {
-            $this->deliverPortalConfigTextToChat($telegramId, (string) $this->createConfig($created), $resolvedName);
-        }
+        // Конфиг создаётся НЕ выданным: он становится кандидатом на выдачу —
+        // отмечаем его в мультивыборе, чтобы админ отправил кнопкой «Отправить N».
+        // Сама выдача (привязка владельца + уведомление) — в userPortalWgSend.
+        $newIndex = count($this->readClients()) - 1;
+        $_SESSION['userPortalWgSelect'][(string) $canonicalKey][(int) $newIndex] = true;
+        $this->userPortalSetFlash('✅ ' . $this->i18n('user portal wg config created'));
 
-        $issuedCount = $this->bumpUserPortalIssued($ownerSubId, 'wg');
-        $this->userPortalNotifyIssue($ownerSubId, 'wg', $issuedCount);
-
-        // Итог админу — reply'ем на сообщение, где введено имя (ввод имени
-        // reply() удаляет, поэтому целимся в живое меню-сообщение кабинета).
-        $replyTarget = $this->getUserPortalUiMessageId() ?? (int) $this->input['message_id'];
-        $this->send(
-            $this->input['chat'],
-            '✅ ' . $this->i18n('user portal issue config ok'),
-            $replyTarget > 0 ? $replyTarget : false,
-        );
-
-        $this->userPortalCardWg($canonicalKey);
+        // Новый конфиг дописывается в конец clients1.json — показываем последнюю
+        // страницу, где он лежит отмеченным галочкой.
+        $peers    = $this->readClients();
+        $perPage  = max(1, $this->limit ?: 5);
+        $lastPage = max(0, (int) ceil(count($peers) / $perPage) - 1);
+        $this->userPortalCardWg($canonicalKey, $lastPage);
     }
 
     /**
@@ -4175,7 +6081,7 @@ PROBE;
      * server-peer, запись в clients1.json и перезапуск WG. Возвращает новый
      * clients-элемент (для createConfig/QR) или null при сбое.
      */
-    protected function issueNewWgProfile(string $ownerSubId, string $name = '', bool $fullTunnel = true, string $ownerTg = ''): ?array
+    protected function issueNewWgProfile(string $ownerSubId, string $name = '', bool $fullTunnel = true): ?array
     {
         if ($ownerSubId === '') {
             return null;
@@ -4212,7 +6118,6 @@ PROBE;
 
         $serverPeer = [
             '## name'         => $name,
-            '## owner_sub_id' => $ownerSubId,
             'PublicKey'       => $publicPeerKey,
             'AllowedIPs'      => "$clientIp/32",
         ];
@@ -4230,14 +6135,10 @@ PROBE;
 
         $interface = [
             '## name'         => $name,
-            '## owner_sub_id' => $ownerSubId,
             '## endpoint_custom' => $endpointCustom,
             'PrivateKey'      => $privatePeerKey,
             'Address'         => "$clientIp/32",
         ];
-        if ($ownerTg !== '') {
-            $interface['## owner_tg'] = $ownerTg;
-        }
         if (!empty($this->getPacConf()[$this->getInstanceWG(1) . 'amnezia'])) {
             $interface['MTU'] = (string) $this->getAwgClientMtu();
         }
@@ -4256,66 +6157,6 @@ PROBE;
         }
 
         return $clientConf;
-    }
-
-    /**
-     * Доставить конфиг/ссылку (Kind 'wg' | 'vless') в один конкретный чат.
-     * WG-выдача привязана к человеку (telegram_id), а не к VLESS-подписке,
-     * поэтому здесь адрес — сам чат, без резолва по subscription_id.
-     */
-    protected function deliverPortalConfigToChat(string $telegramId, string $payload, string $kind, string $label, string $conf = ''): void
-    {
-        if ($telegramId === '') {
-            return;
-        }
-        try {
-            // WG-выдача: полный комплект, как в «показать выданный конфиг» —
-            // ссылка Amnezia + два QR (AmneziaVPN + AmneziaWG) + conf-файл + инструкции.
-            if ($kind === 'wg' && $conf !== '') {
-                $text = '<b>' . htmlspecialchars($label, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</b>' . "\n\n"
-                    . $this->i18n('user portal wg amnezia link') . ':' . "\n"
-                    . '<code>' . htmlspecialchars($payload, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</code>' . "\n\n"
-                    . '<pre><code>' . htmlspecialchars($conf, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</code></pre>';
-                $this->send((int) $telegramId, $text);
-
-                $qrLabel = $label !== '' ? $label : 'WG';
-                $shortLinkCode = preg_replace('~^vpn://~', '', $payload);
-                $this->sendQrToChat((int) $telegramId, $shortLinkCode, $qrLabel . ' — AmneziaVPN');
-                $this->sendQrToChat((int) $telegramId, $conf, $qrLabel . ' — AmneziaWG');
-
-                $confFile = sys_get_temp_dir() . '/' . preg_replace(['~\s+~', '~\(~', '~\)~'], ['_'], $qrLabel) . '.conf';
-                file_put_contents($confFile, $conf);
-                $this->sendFile((int) $telegramId, curl_file_create($confFile), $qrLabel . ' — AmneziaWG (.conf)');
-                @unlink($confFile);
-
-                $this->send((int) $telegramId, $this->i18n('user portal amnezia instructions'));
-                return;
-            }
-
-            $this->sendPhoto((int) $telegramId, curl_file_create($this->portalConfigQrFile($payload)), $this->portalConfigCaption($kind, $label, $payload));
-            if ($kind === 'wg') {
-                $this->send((int) $telegramId, $this->i18n('user portal amnezia instructions'));
-            }
-        } catch (\Throwable $e) {
-            // Не фатально: доставка конфига не должна ломать операцию.
-        }
-    }
-
-    /**
-     * Доставить «голый» WG-конфиг текстом в один конкретный чат (не-AWG тип,
-     * где нет Amnezia-ссылки).
-     */
-    protected function deliverPortalConfigTextToChat(string $telegramId, string $conf, string $label): void
-    {
-        if ($telegramId === '') {
-            return;
-        }
-        $text = '<b>' . htmlspecialchars($label, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</b> — WG' . "\n" . '<pre><code>' . htmlspecialchars($conf, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</code></pre>';
-        try {
-            $this->send((int) $telegramId, $text);
-        } catch (\Throwable $e) {
-            // Не фатально.
-        }
     }
 
     /**
@@ -4377,6 +6218,32 @@ PROBE;
     }
 
     /**
+     * Сводное уведомление об одной выдаче прямо в чат получателя (telegram id),
+     * без резолва по подписке: WG-выдача привязана к человеку, а не к VLESS-
+     * подписке. Один текст вместо набора конфигов — «Вам выдано N, нажмите
+     * „Обновить“».
+     */
+    protected function userPortalNotifyIssueToChat(string $telegramId, string $kind, int $count): void
+    {
+        if ($telegramId === '' || $count < 1) {
+            return;
+        }
+        $proto = $kind === 'wg' ? 'Amnezia/WG' : 'VLESS';
+        $text = sprintf(
+            '🔔 %s: %s (%d) — %s',
+            $this->i18n('user portal issued notify'),
+            $proto,
+            $count,
+            $this->i18n('user portal issued notify refresh')
+        );
+        try {
+            $this->send((int) $telegramId, $text);
+        } catch (\Throwable $e) {
+            // Не фатально.
+        }
+    }
+
+    /**
      * Доставить «голый» WG-конфиг текстом (для не-AWG типа, где нет Amnezia-
      * ссылки) во все привязанные к подписке чаты.
      */
@@ -4404,17 +6271,6 @@ PROBE;
         $qrFile = sys_get_temp_dir() . '/qr_portal_' . substr(md5($payload), 0, 12) . '.png';
         exec("qrencode -t png -o " . escapeshellarg($qrFile) . " " . escapeshellarg($payload));
         return $qrFile;
-    }
-
-    /**
-     * Отправить QR-картинку в произвольный чат (в отличие от sendQr, который
-     * шлёт в input['chat']). Нужен для доставки выданного конфига получателю.
-     */
-    protected function sendQrToChat(int $chatId, string $code, string $title): void
-    {
-        $qrFile = $this->portalConfigQrFile($code);
-        $this->sendPhoto($chatId, curl_file_create($qrFile), $title);
-        @unlink($qrFile);
     }
 
     protected function portalConfigCaption(string $kind, string $label, string $payload): string
