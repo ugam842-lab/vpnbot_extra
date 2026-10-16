@@ -179,6 +179,7 @@ trait UserPortalTrait
             'userPortalSavePassword'          => $this->i18n('user portal enter new password'),
             'userPortalChangePasswordVerify'  => $this->i18n('user portal enter current password'),
             'userPortalRenameDeviceSave'      => $this->i18n('user portal enter device name'),
+            'userPortalRenameWgSave'          => $this->i18n('user portal enter wg name'),
             'userPortalSupportSave'           => $this->i18n('support placeholder'),
             'userPortalSupportReplySave'      => $this->i18n('support placeholder'),
             'userPortalWriteToSave'           => $this->i18n('support placeholder'),
@@ -466,6 +467,11 @@ trait UserPortalTrait
             }
             if ($callback === 'userPortalRenameDeviceSave') {
                 $this->userPortalRenameDeviceSave($message, ...$args);
+
+                return;
+            }
+            if ($callback === 'userPortalRenameWgSave') {
+                $this->userPortalRenameWgSave($message, ...$args);
 
                 return;
             }
@@ -4891,10 +4897,16 @@ PROBE;
                     }
                 }
                 $text[] = $line;
-                $data[] = [[
-                    'text'          => $this->i18n('user portal issued wg show') . ' ' . $name,
-                    'callback_data' => '/userPortalIssuedWgShow ' . $item['index'],
-                ]];
+                $data[] = [
+                    [
+                        'text'          => $this->i18n('user portal issued wg show') . ' ' . $name,
+                        'callback_data' => '/userPortalIssuedWgShow ' . $item['index'],
+                    ],
+                    [
+                        'text'          => $this->i18n('user portal rename wg') . ' ' . $name,
+                        'callback_data' => '/userPortalRenameWg ' . $item['index'],
+                    ],
+                ];
             }
         }
 
@@ -4926,6 +4938,83 @@ PROBE;
         ]];
 
         $this->userPortalShow(implode("\n", $text), $data ?: false);
+    }
+
+    /**
+     * Переименовать выданный WG-конфиг: спросить новое имя, показав текущее,
+     * чтобы человек не переименовал случайно не тот конфиг.
+     */
+    public function userPortalRenameWg($clientIndex)
+    {
+        $resolved = $this->userPortalIssuedWgResolve($clientIndex);
+        if ($resolved === null) {
+            $this->ackCallback($this->i18n('user portal issued wg empty'), true);
+            $this->userPortalIssuedWg();
+
+            return;
+        }
+
+        $prompt = $this->i18n('user portal enter wg name');
+        $currentName = trim((string) ($resolved['name'] ?? ''));
+        if ($currentName !== '') {
+            $prompt .= "\n\n" . $this->i18n('user portal current device name') . ': <b>'
+                . htmlspecialchars($currentName, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</b>';
+        }
+        $this->userPortalPromptInput($prompt, 'userPortalRenameWgSave', [$clientIndex]);
+    }
+
+    /**
+     * Сохранить новое имя WG-конфига и атомарно применить его на сервере
+     * (syncconf) — без обрыва соединений у остальных клиентов.
+     */
+    public function userPortalRenameWgSave($name, $clientIndex)
+    {
+        $name = trim((string) $name);
+        $session = $this->getUserPortalSession();
+        if ($session === null) {
+            $this->userPortalSetFlash('⚠️ ' . $this->i18n('user portal bind first'));
+            $this->userPortalMenu();
+
+            return;
+        }
+
+        $resolved = $this->userPortalIssuedWgResolve($clientIndex);
+        if ($resolved === null) {
+            $this->userPortalSetFlash('⚠️ ' . $this->i18n('user portal issued wg empty'));
+            $this->userPortalIssuedWg();
+
+            return;
+        }
+
+        if ($name === '') {
+            $this->userPortalSetFlash('⚠️ ' . $this->i18n('user portal empty device name'));
+            $this->userPortalRenameWg($clientIndex);
+
+            return;
+        }
+
+        $ownerSubId = (string) $session['subscription_id'];
+        if (!$this->checkSubscriptionActionRateLimit($ownerSubId, 'wg_rename', 30, 600)) {
+            $this->userPortalSetFlash('⚠️ ' . $this->i18n('user portal rate limit'));
+            $this->userPortalIssuedWg();
+
+            return;
+        }
+
+        $clients = $this->readClients();
+        $clients[$clientIndex]['interface']['## name'] = $name;
+        $this->saveClients($clients);
+
+        $server = $this->readConfig();
+        foreach ($server['peers'] as $k => $v) {
+            if (($v['AllowedIPs'] ?? '') === ($clients[$clientIndex]['interface']['Address'] ?? '')) {
+                $server['peers'][$k]['## name'] = $name;
+            }
+        }
+        $this->restartWG($this->createConfig($server));
+
+        $this->userPortalSetFlash('✅ ' . $this->i18n('user portal wg renamed') . ': ' . $name);
+        $this->userPortalIssuedWg();
     }
 
     /**

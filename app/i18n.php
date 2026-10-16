@@ -937,6 +937,18 @@ $i = [
         'en' => 'Show',
         'ru' => 'Показать',
     ],
+    'user portal rename wg' => [
+        'en' => 'Rename',
+        'ru' => 'Переименовать',
+    ],
+    'user portal enter wg name' => [
+        'en' => 'Enter a new name for this config',
+        'ru' => 'Введите новое имя для этого конфига',
+    ],
+    'user portal wg renamed' => [
+        'en' => 'Config renamed',
+        'ru' => 'Конфиг переименован',
+    ],
     'user portal show mode title' => [
         'en' => 'How would you like to connect?',
         'ru' => 'Как тебе удобнее подключиться?',
