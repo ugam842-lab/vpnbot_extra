@@ -299,6 +299,9 @@ class Bot
             case preg_match('~^/userPortal$~', $this->input['callback'], $m):
                 $this->userPortalMenu();
                 break;
+            case preg_match('~^/userPortalSubscription$~', $this->input['callback'], $m):
+                $this->userPortalSubscription();
+                break;
             case preg_match('~^/userPortalImport$~', $this->input['callback'], $m):
                 $this->userPortalImport();
                 break;

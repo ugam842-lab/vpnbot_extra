@@ -358,6 +358,53 @@ trait UserPortalTrait
         return $label . $this->i18n('user portal protocol available') . $usage;
     }
 
+    /**
+     * Компактная сводка для верхнего уровня кабинета: время жизни, трафик и
+     * сколько выдано (VLESS / Amnezia). Без email, счётчика устройств, лимита
+     * AWG и статуса пароля — детали уехали в экраны «Подписка» и «Мои
+     * устройства», чтобы верх кабинета не был перегружен.
+     */
+    protected function buildUserPortalSummaryLines(array $session): array
+    {
+        $client = $session['client'];
+        $pac = $this->getPacConf();
+        $st = $this->getXrayStats();
+        $lines = [];
+
+        // Время жизни — срок кабинета (expires_at), единый для VLESS и Amnezia.
+        $tgId = (string) ($session['telegram_id'] ?? '');
+        $expiresAt = $tgId !== '' ? $this->getUserPortalExpiry($tgId) : 0;
+        if ($expiresAt > 0) {
+            $date = date('d.m.Y H:i', $expiresAt);
+            if ($expiresAt > time()) {
+                $lines[] = $this->i18n('user portal expires') . ': ' . $date . ' (' . $this->getTime($expiresAt) . ')';
+            } else {
+                $lines[] = $this->i18n('user portal expired') . ': ' . $date;
+            }
+        } else {
+            $lines[] = $this->i18n('user portal expires') . ': ' . $this->i18n('user portal no expiry');
+        }
+
+        // Трафик.
+        $totals = $this->getSubscriptionXrayTrafficTotals($st, $client, $session['clientIndex']);
+        $trafficLine = $this->i18n('user portal traffic') . ': ' . $this->formatTrafficUpDown((int) $totals['download'], (int) $totals['upload']);
+        $limit = $this->getClientTrafficLimitBytes($client, $pac);
+        if ($limit > 0) {
+            $trafficLine .= ' / ' . $this->getBytes($limit);
+        }
+        $lines[] = $trafficLine;
+
+        // Сводка «сколько выдано».
+        $issuedVless = (string) ($session['subscription_id'] ?? '') !== '' ? 1 : 0;
+        $issuedWg = count($this->userPortalOwnedWgClients($session));
+        $lines[] = '';
+        $lines[] = $this->i18n('user portal issued title') . ':';
+        $lines[] = '· VLESS — ' . $issuedVless . ' ' . $this->i18n('user portal issued vless');
+        $lines[] = '· Amnezia/WG — ' . $issuedWg . ' ' . $this->i18n('user portal issued wg');
+
+        return $lines;
+    }
+
     protected function shouldHandleUserPortalTextInput(): bool
     {
         if (!empty($this->input['callback'])) {
@@ -2336,9 +2383,7 @@ trait UserPortalTrait
                     $text[] = $this->i18n('user portal expires') . ': ' . $this->i18n('user portal no expiry');
                 }
             } else {
-                $text = array_merge($text, $this->buildUserPortalAccountInfoLines($session));
-                $text[] = '';
-                $text = array_merge($text, $this->buildUserProtocolCardLines($session));
+                $text = array_merge($text, $this->buildUserPortalSummaryLines($session));
             }
         } else {
             $text[] = $this->getUserPortalNoAccessText();
@@ -2358,33 +2403,17 @@ trait UserPortalTrait
                 'callback_data' => '/userPortalIssuedWg',
             ]];
         } else {
+            // Верхний уровень — только «Подписка VLESS» и «Мои конфиги».
+            // Ссылки, устройства, пароль и проверка уехали внутрь подписки
+            // (userPortalSubscription): верх кабинета больше не перегружен.
             $data[] = [[
                 'text'          => $this->i18n('user portal my subscription vless'),
-                'callback_data' => '/userPortalDevices',
+                'callback_data' => '/userPortalSubscription',
             ]];
             $data[] = [[
                 'text'          => $this->i18n('user portal issued wg menu'),
                 'callback_data' => '/userPortalIssuedWg',
             ]];
-            $links = $this->buildUserSubscriptionLinks($session['subscription_id']);
-            $text[] = '';
-            $text[] = $this->i18n('user portal new page link') . ':';
-            $text[] = $links['page'];
-            $text[] = '';
-            $text[] = $this->i18n('user portal new clash link') . ':';
-            $text[] = $links['clash'];
-
-            $data[] = [[
-                'text'          => $this->hasSubscriptionDevicePassword($session['client'])
-                    ? $this->i18n('user portal change password')
-                    : $this->i18n('user portal set password'),
-                'callback_data' => '/userPortalPassword',
-            ]];
-            $data[] = [[
-                'text'          => $this->i18n('user portal check'),
-                'callback_data' => '/userPortalCheck',
-            ]];
-
         }
 
         // «empty proto» (MTProto-ссылка) показывается всегда — она не зависит
@@ -2721,6 +2750,66 @@ trait UserPortalTrait
 
         $this->userPortalSetFlash('✅ ' . $this->i18n('user portal password saved'));
         $this->userPortalMenu();
+    }
+
+    public function userPortalSubscription()
+    {
+        $session = $this->getUserPortalSession();
+        if ($session === null) {
+            $this->ackCallback($this->i18n('user portal bind first'), true);
+            $this->userPortalPromptInput(
+                $this->i18n('user portal bind first') . "\n\n" . $this->i18n('user portal send old link'),
+                'userPortalImportLink',
+                [],
+            );
+
+            return;
+        }
+
+        $ownerSubId = (string) $session['subscription_id'];
+        $links = $this->buildUserSubscriptionLinks($ownerSubId);
+
+        // Экран подписки: ссылка-кнопка (открывается тапом, копируется
+        // долгим нажатием), устройства, пароль и проверка — всё внутри.
+        // Сюда же уехала карточка протоколов (VLESS/AmneziaWG/Hysteria2),
+        // чтобы верх кабинета оставался компактной сводкой.
+        $text = [$this->i18n('user portal my subscription vless')];
+        $text[] = '';
+        $text = array_merge($text, $this->buildUserProtocolCardLines($session));
+
+        $data = [];
+        if ($links['page'] !== '') {
+            $data[] = [[
+                'text' => $this->i18n('user portal new page link'),
+                'url'  => $links['page'],
+            ]];
+        }
+        if ($links['clash'] !== '') {
+            $data[] = [[
+                'text' => $this->i18n('user portal new clash link'),
+                'url'  => $links['clash'],
+            ]];
+        }
+        $data[] = [[
+            'text'          => $this->i18n('user portal my devices'),
+            'callback_data' => '/userPortalDevices',
+        ]];
+        $data[] = [[
+            'text'          => $this->hasSubscriptionDevicePassword($session['client'])
+                ? $this->i18n('user portal change password')
+                : $this->i18n('user portal set password'),
+            'callback_data' => '/userPortalPassword',
+        ]];
+        $data[] = [[
+            'text'          => $this->i18n('user portal check'),
+            'callback_data' => '/userPortalCheck',
+        ]];
+        $data[] = [[
+            'text'          => $this->i18n('back'),
+            'callback_data' => '/userPortal',
+        ]];
+
+        $this->userPortalShow(implode("\n", $text), $data);
     }
 
     public function userPortalDevices($page = 0)
@@ -4266,7 +4355,7 @@ PROBE;
         $data = [];
         if ($hasVless) {
             $data[] = [[
-                'text'          => $this->i18n('user portal issue vless') . ' — ' . $this->i18n('user portal grant revoke'),
+                'text'          => 'VLESS — ' . $this->i18n('user portal grant revoke'),
                 'callback_data' => '/userPortalCardRevokeVless ' . rawurlencode($canonicalKey),
             ]];
         }
@@ -4589,7 +4678,11 @@ PROBE;
     {
         $subId = (string) ($row['subscription_id'] ?? '');
         $tgId  = (string) ($row['telegram_id'] ?? '');
-        $vless = $subId !== '' ? 1 : 0;
+        // «VLESS 1» только если подписка реально есть в xray (та же проверка,
+        // что и в меню отзыва userPortalCardRevoke). Раньше считали по непустому
+        // subscription_id — карточка показывала «VLESS 1» при битой/протухшей
+        // привязке, а отозвать было нечего.
+        $vless = ($subId !== '' && $this->resolveSubscriptionClient($subId) !== null) ? 1 : 0;
         $wg    = $tgId !== '' ? count($this->userPortalIssuedWgClientsByTg($tgId)) : 0;
 
         return ['vless' => $vless, 'wg' => $wg];
