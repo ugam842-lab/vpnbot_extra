@@ -1,46 +1,80 @@
-# VPNBot Extra — форк ugam842
+# VPNBot Extra v3-trimx
+
+Telegram-бот для управления VPN-сервером: VLESS + Mihomo/Clash подписки, AWG (WG1), AdGuard, MTProto, Hysteria.
+
+## Русский
 
 Telegram-бот для управления VPN-сервером из Telegram.
 
-Форк: mercurykd/vpnbot → TrimXx/vpnbot_extra → этот форк.
+**Руководство пользователя (RU):** [docs/USER_GUIDE_RU.md](docs/USER_GUIDE_RU.md) — как выдавать доступ, HWID, подписки, WG/AWG и типовые сценарии без технических деталей.
 
-## Что поддерживается
+**Переменные Clash-шаблонов:** [docs/CLASH_TEMPLATE_RU.md](docs/CLASH_TEMPLATE_RU.md) — плейсхолдеры `~domain~`, `~ws_path~`, порты, `auto-transports`, примеры.
 
-- VLESS (Reality / Websocket / XHTTP)
-- WireGuard / AmneziaWG
-- IKEv2 (native strongSwan, EAP-MSCHAPv2)
-- L2TP / IPsec (IKEv1 + XAuth + PSK)
+### Что поддерживается
+
+- VLESS transport registry (`Reality` / `Websocket` / `XHTTP` flags) + Mihomo/Clash подписки
+- WireGuard / AmneziaWG (только WG1)
 - AdGuardHome
 - MTProto
 - Hysteria
 - PAC / Rule-set
-- автоматические SSL-сертификаты
+- Автоматические SSL-сертификаты
 
-## Окружение
+### Окружение
 
-Ubuntu 22.04/24.04, Debian 11/12.
+- Ubuntu `22.04/24.04`
+- Debian `11/12`
 
-## Установка
+### Установка (ветка master)
 
 ```shell
 wget -O- https://raw.githubusercontent.com/ugam842-lab/vpnbot_extra/master/scripts/init.sh | sh -s YOUR_TELEGRAM_BOT_KEY master
 ```
 
-## Обновление (без токена бота)
+При первом запуске создаются `.env` (из `env.defaults`), `config/` (из `config-templates/`) и `override.env`.
+
+`init.sh` берёт код из этого форка (`REPO_URL` = `https://github.com/ugam842-lab/vpnbot_extra.git`), апстрим TrimXx в установке не участвует.
+
+### Бинарники `bin/` при чистой установке
+
+`bin/` намеренно не версионируется, поэтому в свежем клоне его нет, а `docker-compose.yml` монтирует оттуда бинарники (`./bin/xray`, `./bin/amneziawg-go`). Перед `docker compose up` цель `make u` вызывает `scripts/ensure_bin.sh`: если файла нет — он достаётся из образа, который этот бинарник собирает (`vpnbot-xr` / `vpnbot-wg`), если файл на месте — не перезаписывается. Раньше на чистой ноде установка падала на старте контейнеров: docker создавал отсутствующий путь каталогом и отказывался монтировать каталог в файл (`not a directory: Are you trying to mount a directory onto a file`).
+
+### Переключение админ / пользователь
+
+В списке пользователей админки есть кнопка `Перейти как пользователь` — открывается собственный кабинет портала глазами обычного пользователя, без отдельного аккаунта и без выхода из админки. В кабинете тем же способом появляется `Перейти в админку`. Технически это команда `/userPortalAsSelf`.
+
+### Обновление (без токена бота)
 
 ```shell
 wget -O- https://raw.githubusercontent.com/ugam842-lab/vpnbot_extra/master/scripts/init.sh | sh -s -- master
 ```
 
-Полное обновление репозитория: `UPGRADE_SCOPE=all` перед той же командой.
+### Важное по обновлениям
 
-## Перезапуск
+- `init.sh` по умолчанию обновляет только `app/`, чтобы не перезаписывать ваши рабочие конфиги.
+- Для полного обновления репозитория используйте:
+
+```shell
+UPGRADE_SCOPE=all wget -O- https://raw.githubusercontent.com/ugam842-lab/vpnbot_extra/master/scripts/init.sh | sh -s -- master
+```
+
+- `make u` и `update/update.sh` обновлены для безопасного сценария: подтягиваются целевые кодовые пути (`app`, `update`, `makefile`, `version`) без wipe конфигов.
+
+### Конфигурация (важно)
+
+- **`config/`** — только на сервере, **не в git** (живые данные, секреты).
+- **`config-templates/`** — шаблоны в репозитории; при `make u` / `init.sh` скрипт `bootstrap_config.sh` создаёт недостающие файлы в `config/` без перезаписи существующих.
+- **`.env`** — не в git; при первом deploy копируется из `env.defaults` (порты WG1, MTProto, IMAGE и т.д.).
+- Локально можно держать полный слепок бота в `config/` — git его не видит.
+- Не используйте `git add -A` без проверки; `make c` для config удалён.
+
+### Перезапуск
 
 ```shell
 make r
 ```
 
-## Автозапуск после перезагрузки
+### Автозапуск после перезагрузки
 
 ```shell
 crontab -e
@@ -52,43 +86,173 @@ crontab -e
 @reboot cd /root/vpnbot_extra && make r
 ```
 
-## Что появилось в форке
+### Основные доработки в форке
 
-- Транспорт XHTTP + Reality (обход ТСПУ)
+- HWID runtime mode: глобальный флаг + override на подписку.
+- Ленивая миграция на модель `1 устройство = 1 device UUID`.
+- Совместимость старых ссылок подписки после миграции.
+- Отображение подключенных устройств и трафика по устройствам в `subscription`.
+- Пароль на удаление устройства + смена/сброс пароля.
+- Заголовки ответа по HWID-статусу в выдаче подписки.
+- Глобальные и per-user transport флаги (`Reality` / `WS` / `XHTTP` / `Hysteria` / `AWG`).
+- Многодоменная схема (`domain_main + aliases`) и SAN-сертификаты.
+- Runtime AWG-профили по `device_uuid` (включая выдачу в Mihomo/Clash при наличии `device_uuid`).
+- Runtime AWG операции закреплены за WG1-контекстом.
+- Поддержка DNS-алиасов:
+  - вывод DoH/DoT по `main + aliases` в меню AdGuard;
+  - добавление DoH URL по алиасам в `dns.nameserver` для Clash-подписки.
+- Кнопка `change reality server ip/domain` теперь меняет только клиентский Reality `server` (bridge), не трогая `xray reality dest`.
+- Обновлен импорт бэкапа: `pac` восстанавливается merge-способом для совместимости старых/новых бэкапов и новых полей.
+- Рассылка уходит только одобренным пользователям: pending-заявки и отклонённые её не получают, а в отчёте перечисляются имена тех, кому доставка не удалась.
+- Переключение админ / пользователь: `Перейти как пользователь` в списке пользователей и `Перейти в админку` в кабинете.
+- Кабинет: кнопка `Обновить` перерисовывает текущее меню на месте, в том числе для message-команд, где нет callback_id.
+- Выдача конфигов: одно сводное сообщение «нажмите Обновить» по `telegram_id` вместо серии сообщений, просмотр конфига по имени.
+- Пагинация выдачи: новый конфиг открывается на той странице, где он действительно появился (раньше карточка возвращалась на предыдущую и добавленный конфиг был не виден).
+- Раздел «Вам выдано» считается по леджеру выдачи (`user_portal_issued`) — протокол и количество, а не перечень устройств.
+- Отзыв доступа зеркалит выдачу: выбор VLESS / Amnezia, мультивыбор AmneziaWG-конфигов, батч-отзыв.
+- Импорт бэкапа не сбрасывает настройки: битый или пустой `pac.json` больше не принимается за пустую конфигурацию.
+- Запись `pac.json` идёт под реентрантным локом, вечного кеша у cron больше нет — параллельные выдачи не теряют заявки.
+- `init.sh` больше не делает destructive `git checkout` рабочих файлов; чистая установка сама достаёт бинарники в `bin/` (`scripts/ensure_bin.sh`).
+
+### Roadmap (v3.x)
+
+- Модульность `bot.php`: HWID вынесен в `HwidTrait` (~1800 строк)
+- Legacy SS/OC/DNSTT/Naive: заглушки и `LegacyRemovedTrait`
+- Ускорение UI: кэш pac/xray/stats, blinkmenu in-place, `ackCallback` на меню
+- Подпись subscription URL (`sig` + epoch) и ротация в config
+- PAC decode: только legacy serialize с `allowed_classes => false`
+- Transport registry v3.1: порты WS/XHTTP/Reality в `pac.transport_registry.ports`
+
+### Деплой v3-trimx (runbook)
+
+1. Экспорт настроек через бот (**config → export**)
+2. `git pull` (или `UPGRADE_SCOPE=all` через `init.sh` для compose)
+3. `docker compose build wg1 php --no-cache`
+4. `docker compose up -d --remove-orphans`
+5. `bash scripts/migrate_awg2.sh` (сброс `wg1_amnezia_keys` в pac)
+6. `docker compose restart php xr wg1`
+7. Smoke: главное меню, подписка `?t=cl`, HWID + AWG Device в Mihomo, ручной AWG QR
+
+### Заметка по бэкапу/восстановлению
+
+- Экспорт включает: `pac`, `xray`, `xraystats`, `hwid`, WG1, AdGuard, сертификаты, MTProto, Hysteria.
+- Импорт сохраняет новые ключи `pac` при восстановлении старых бэкапов (merge с текущими дефолтами).
+
+### AI notice
+
+Часть исправлений и рефакторинга выполнена с помощью ИИ.
+
+---
+
+## English
+
+Telegram bot for managing a VPN server directly from Telegram.
+
+### Supported stack
+
+- VLESS transport registry (`Reality` / `Websocket` / `XHTTP` flags) + Mihomo/Clash subscriptions
+- WireGuard / AmneziaWG (WG1 only)
+- AdGuardHome
+- MTProto
 - Hysteria
-- Портал выдачи: выдача конфигов, «Вам выдано», отзыв
-- Переключение админ / пользователь в портале
-- Чистая установка сама достаёт бинарники (`scripts/ensure_bin.sh`)
+- PAC / Rule-set
+- Automatic SSL certificates
 
-## Развёртывание IKEv2 / L2TP (IPsec)
+### Environment
 
-IPsec ставится нативно на хост (не в контейнер), бот ходит к нему по ssh и сам
-ведёт пароли. IKEv2:
+- Ubuntu `22.04/24.04`
+- Debian `11/12`
 
-```shell
-sudo IKEV2_SERVER_IP=<IP или домен> bash scripts/setup-ikev2.sh
-```
-
-Скрипт ставит strongSwan, генерит сертификат сервера, прописывает соединение и
-кладёт копию сертификата туда, откуда его видит php-контейнер. L2TP/IPsec
-(IKEv1 + XAuth + общий ключ):
+### Install
 
 ```shell
-sudo L2TP_SERVER_IP=<IP> bash scripts/setup-ikev1-l2tp.sh
+wget -O- https://raw.githubusercontent.com/ugam842-lab/vpnbot_extra/master/scripts/init.sh | sh -s YOUR_TELEGRAM_BOT_KEY master
 ```
 
-Ставит strongSwan и xl2tpd, поднимает L2TP на 1701 и раздаёт клиентам адреса
-из своей подсети. После любой из этих команд дай php-контейнеру ходить на хост
-по ssh — иначе бот не сможет дописывать пароли и перезагружать strongSwan:
+`init.sh` installs from this fork (`REPO_URL` = `https://github.com/ugam842-lab/vpnbot_extra.git`); the TrimXx upstream is not used.
+
+### `bin/` binaries on a clean install
+
+`bin/` is deliberately not versioned, so a fresh clone has no such directory — while `docker-compose.yml` bind-mounts the binaries from it (`./bin/xray`, `./bin/amneziawg-go`). Before `docker compose up`, the `make u` target calls `scripts/ensure_bin.sh`: a missing file is extracted from the image that builds it (`vpnbot-xr` / `vpnbot-wg`), an existing one is left untouched. Previously a clean install failed at container start: docker created the missing path as a directory and refused to mount a directory onto a file (`not a directory: Are you trying to mount a directory onto a file`).
+
+### Admin / user view switch
+
+The admin user list has a `View as user` button — it opens your own portal cabinet from a regular user's point of view, without a second account and without leaving the admin panel. The cabinet then offers `Back to admin panel`. Under the hood this is the `/userPortalAsSelf` command.
+
+### Upgrade (without bot token)
 
 ```shell
-cat /root/vpnbot_extra/ssh/key.pub >> /root/.ssh/authorized_keys
+wget -O- https://raw.githubusercontent.com/ugam842-lab/vpnbot_extra/master/scripts/init.sh | sh -s -- master
 ```
 
-Дальше бот делает остальное сам: при выдаче клиенту из портала генерит пароль
-(EAP для IKEv2, общий ключ + логин/пароль для L2TP), кладёт его в config/ и по
-ssh копирует в /etc/swanctl и перезагружает. Наружу должны быть открыты UDP 500,
-4500 и 1701 (1701 только для L2TP). Оба скрипта можно запускать повторно —
-выданные профили не сломаются.
+### Upgrade behavior
 
-Руководство пользователя: [docs/USER_GUIDE_RU.md](docs/USER_GUIDE_RU.md)
+- `init.sh` updates only `app/` by default to avoid overwriting runtime configs.
+- Full-repo upgrade is still available:
+
+```shell
+UPGRADE_SCOPE=all wget -O- https://raw.githubusercontent.com/ugam842-lab/vpnbot_extra/master/scripts/init.sh | sh -s -- master
+```
+
+- `make u` and `update/update.sh` are adjusted for safer upgrades: target code paths (`app`, `update`, `makefile`, `version`) are refreshed without wiping user configs.
+
+### Restart
+
+```shell
+make r
+```
+
+### Autostart on reboot
+
+```shell
+crontab -e
+```
+
+Add:
+
+```text
+@reboot cd /root/vpnbot_extra && make r
+```
+
+### Key fork improvements
+
+- HWID runtime mode with global and per-subscription override.
+- Lazy migration to `1 device = 1 device UUID`.
+- Backward compatibility for legacy subscription links.
+- Connected device list and per-device traffic in subscription UI.
+- Device deletion password flow with change/reset support.
+- HWID status response headers in subscription endpoints.
+- Global and per-user transport flags (`Reality` / `WS` / `XHTTP` / `Hysteria` / `AWG`).
+- Multi-domain support (`domain_main + aliases`) with SAN certificates.
+- Runtime AWG profiles bound to `device_uuid` (including Mihomo/Clash output when `device_uuid` is present).
+- Runtime AWG operations pinned to WG1 context.
+- DNS aliases support:
+  - DoH/DoT output for `main + aliases` in AdGuard menu;
+  - alias DoH URLs appended to Clash `dns.nameserver`.
+- `change reality server ip/domain` now changes only client-facing Reality `server` (bridge), without changing `xray reality dest`.
+- Backup import improved: `pac` is restored via merge strategy for old/new backup compatibility.
+- `/mirror` script updated (socat TCP/UDP, systemd units, install/status/restart/logs/uninstall).
+- Broadcast reaches approved users only: pending or rejected requests are skipped, and undelivered recipients are listed by name in the report.
+- Admin / user view switch: `View as user` in the user list, `Back to admin panel` in the cabinet.
+- Cabinet: the `Refresh` button re-renders the current menu in place, including for message commands that carry no callback id.
+- Config issuing: one summary "press Refresh" message per `telegram_id` instead of a burst, config preview by name.
+- Issuing pagination: a newly added config opens on the page where it actually landed (previously the card jumped back and the new config stayed invisible).
+- The "Issued to you" section is counted from the issuing ledger (`user_portal_issued`) — protocol and amount, not the device list.
+- Revoke mirrors issuing: VLESS / Amnezia choice, multi-select of AmneziaWG configs, batch revoke.
+- Backup import no longer resets settings: a corrupt or empty `pac.json` is not mistaken for an empty configuration.
+- `pac.json` writes are guarded by a reentrant lock and the cron process no longer keeps a forever cache, so parallel issuing does not lose requests.
+- `init.sh` no longer performs a destructive `git checkout` of working files; a clean install pulls the `bin/` binaries itself (`scripts/ensure_bin.sh`).
+
+### Roadmap (v3.x)
+
+- Split `bot.php`: HWID logic moved to `HwidTrait` (~1800 lines)
+- Legacy SS/OC/DNSTT/Naive stubs via `LegacyRemovedTrait`
+- UI performance: pac/xray/stats cache, in-place blinkmenu, menu `ackCallback`
+- Subscription URL signing (`sig` + epoch) and rotation in config menu
+- PAC decode: legacy serialize only with `allowed_classes => false`
+- Transport registry v3.1: WS/XHTTP/Reality ports in `pac.transport_registry.ports`
+
+### Backup / restore notes
+
+- Export includes: `pac`, `xray`, `xraystats`, `hwid`, WG/WG1, AdGuard, certificates, MTProto, Hysteria, OC, Shadowsocks.
+- Import now preserves newly introduced `pac` keys when restoring older backups (merge with current defaults).
