@@ -941,6 +941,22 @@ $i = [
         'en' => 'Rename',
         'ru' => 'Переименовать',
     ],
+    'user portal download wg' => [
+        'en' => 'Download',
+        'ru' => 'Скачать',
+    ],
+    'user portal download title' => [
+        'en' => 'How would you like to get it?',
+        'ru' => 'Как тебе удобнее получить конфиг?',
+    ],
+    'user portal download sighted' => [
+        'en' => 'I can see',
+        'ru' => 'Я зрячий',
+    ],
+    'user portal download blind' => [
+        'en' => 'I use a screen reader',
+        'ru' => 'Я не зрячий',
+    ],
     'user portal enter wg name' => [
         'en' => 'Enter a new name for this config',
         'ru' => 'Введите новое имя для этого конфига',

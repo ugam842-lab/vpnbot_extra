@@ -4906,6 +4906,10 @@ PROBE;
                         'text'          => $this->i18n('user portal rename wg') . ' ' . $name,
                         'callback_data' => '/userPortalRenameWg ' . $item['index'],
                     ],
+                    [
+                        'text'          => $this->i18n('user portal download wg') . ' ' . $name,
+                        'callback_data' => '/userPortalWgDownload ' . $item['index'],
+                    ],
                 ];
             }
         }
@@ -5243,6 +5247,88 @@ PROBE;
         }
 
         // .conf — всегда.
+        $confFile = sys_get_temp_dir() . '/' . preg_replace(['~\s+~', '~\(~', '~\)~'], ['_'], $label) . '.conf';
+        file_put_contents($confFile, $conf);
+        $this->sendFile($this->input['chat'], curl_file_create($confFile), $label . ' — ' . $clientName . ' (.conf)');
+        @unlink($confFile);
+    }
+
+    /**
+     * «Скачать» — короткий путь рядом с «Переименовать»: развилка «зрячий /
+     * незрячий» без выбора ОС. Зрячему шлём 2 QR (AmneziaWG + AmneziaVPN) и
+     * .conf, незрячему — только .conf.
+     */
+    public function userPortalWgDownload($clientIndex)
+    {
+        $resolved = $this->userPortalIssuedWgResolve($clientIndex);
+        if ($resolved === null) {
+            $this->ackCallback($this->i18n('user portal issued wg empty'), true);
+            $this->userPortalIssuedWg();
+
+            return;
+        }
+
+        $text = [$this->i18n('user portal issued title')];
+        if ($resolved['name'] !== '') {
+            $text[] = '<b>' . htmlspecialchars($resolved['name'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</b>';
+        }
+        $text[] = '';
+        $text[] = $this->i18n('user portal download title');
+
+        $this->userPortalShow(implode("\n", $text), [
+            [[
+                'text'          => $this->i18n('user portal download sighted'),
+                'callback_data' => '/userPortalWgDownloadGo ' . $resolved['index'] . ' sighted',
+            ]],
+            [[
+                'text'          => $this->i18n('user portal download blind'),
+                'callback_data' => '/userPortalWgDownloadGo ' . $resolved['index'] . ' blind',
+            ]],
+            [[
+                'text'          => $this->i18n('back'),
+                'callback_data' => '/userPortalIssuedWg',
+            ]],
+        ]);
+    }
+
+    /**
+     * «Скачать» — шаг 2: отправка файлов. Зрячему — QR AmneziaWG, QR
+     * AmneziaVPN и .conf; незрячему — только .conf.
+     */
+    public function userPortalWgDownloadGo($clientIndex, $mode)
+    {
+        if ($mode !== 'sighted' && $mode !== 'blind') {
+            $this->ackCallback($this->i18n('user portal issued wg empty'), true);
+
+            return;
+        }
+        $resolved = $this->userPortalIssuedWgResolve($clientIndex);
+        if ($resolved === null) {
+            $this->ackCallback($this->i18n('user portal issued wg empty'), true);
+            $this->userPortalIssuedWg();
+
+            return;
+        }
+
+        $label = $resolved['name'] !== '' ? $resolved['name'] : ('WG ' . $resolved['index']);
+        $conf = $resolved['conf'];
+        $isAwg = $this->getWGType() === 'awg';
+        $clientName = $isAwg ? 'AmneziaWG' : 'WireGuard';
+
+        $this->ackCallback();
+
+        // Зрячему — два QR: ключ WireGuard/AmneziaWG и ключ AmneziaVPN.
+        if ($mode === 'sighted') {
+            $this->sendQr($label, $conf, $label . ' — ' . $clientName);
+            if ($isAwg) {
+                $short = (string) $this->getAmneziaShortLink($resolved['peer']);
+                if ($short !== '') {
+                    $this->sendQr($label, preg_replace('~^vpn://~', '', $short), $label . ' — AmneziaVPN');
+                }
+            }
+        }
+
+        // .conf — всем.
         $confFile = sys_get_temp_dir() . '/' . preg_replace(['~\s+~', '~\(~', '~\)~'], ['_'], $label) . '.conf';
         file_put_contents($confFile, $conf);
         $this->sendFile($this->input['chat'], curl_file_create($confFile), $label . ' — ' . $clientName . ' (.conf)');

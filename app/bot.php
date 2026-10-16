@@ -466,6 +466,12 @@ class Bot
             case preg_match('~^/userPortalIssuedWgGetConf (\d+) (sighted|blind) (win|mac|linux|ios|android)$~', $this->input['callback'], $m):
                 $this->userPortalIssuedWgGetConf((int) $m[1], $m[2], $m[3]);
                 break;
+            case preg_match('~^/userPortalWgDownload (\d+)$~', $this->input['callback'], $m):
+                $this->userPortalWgDownload((int) $m[1]);
+                break;
+            case preg_match('~^/userPortalWgDownloadGo (\d+) (sighted|blind)$~', $this->input['callback'], $m):
+                $this->userPortalWgDownloadGo((int) $m[1], $m[2]);
+                break;
             case preg_match('~^/userPortalIssuedWg(?:_(\d+))?$~', $this->input['callback'], $m):
                 $this->userPortalIssuedWg((int) ($m[1] ?? 0));
                 break;
